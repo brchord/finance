@@ -2,12 +2,13 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import time
 
 from scipy.optimize import minimize
 
-# ==========================================
-# 1. BLACK-SCHOLES GREEKS & PRICING
-# ==========================================
+# =============================================
+# 1. Black-Scholes Options Pricing and Greeks.
+# =============================================
 def norm_cdf(x): return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 def bs_price(S, K, T, r, sigma, is_call=False):
@@ -32,6 +33,9 @@ def bs_delta(S, K, T, r, sigma, is_call=False):
     if is_call: return norm_cdf(d1)
     else: return norm_cdf(d1) - 1.0
 
+# ==================================================
+# 2. Dynamic Stochastic Volatility Interpolation.
+# ==================================================
 class DynamicSVI:
     def __init__(self, strikes_market, iv_market, spot_price, T):
         """
@@ -100,10 +104,10 @@ class DynamicSVI:
         iv_curve = np.sqrt(np.maximum(w_t, 1e-8) / current_T)
         return iv_curve
 
-# ==========================================
+# ===============================================
 # 3. Stochastic Volatility with Correlated Jumps
 #    Time Series Simulation
-# ==========================================
+# ===============================================
 class SVCJSimulation:
     """
     Stochastic Volatility with Correlated Jumps (SVCJ)
@@ -181,7 +185,7 @@ class SVCJSimulation:
         return vix3m_path        
 
 # ==========================================
-# 4. THE TRADING ENGINE (Operator's Manual)
+# 4. Trading simulation (Operator's Manual)
 # ==========================================
 class ShortSPXPutStrategy:
     def __init__(self,
@@ -408,42 +412,62 @@ class ShortSPXPutStrategy:
                 After-trade NAV: ${nav:,.2f}
                 Previous Cash: ${prev_cash:,.2f}""")
 
+# ============================================
+# 5. Fitting current volatility curves with
+#    real market data and start the
+#    simulation.
+# NOTE: Real options chain data from 
+#       Aug 15th 2026.
+# ============================================
+def main():
+    spx_chain_data = """
+    6900	.2283
+    7200	.1907
+    7375	.1698
+    7475	.1586
+    7550	.1506
+    7625	.1433
+    7700	.1367
+    7750	.1328
+    7825	.1280
+    7875	.1256
+    7925	.1238
+    8000	.1213
+    8050	.1210
+    8100	.1214
+    8300	.1330
+    """
+    spx_chain_dtes = 44.0
+    spot_spx = 7786.00
+    spot_vix = 0.1425
+    strikes = []
+    ivs = []
 
-# --- Real options chain data from Aug 15th 2026
-spx_chain_data = """
-6900	.2283
-7200	.1907
-7375	.1698
-7475	.1586
-7550	.1506
-7625	.1433
-7700	.1367
-7750	.1328
-7825	.1280
-7875	.1256
-7925	.1238
-8000	.1213
-8050	.1210
-8100	.1214
-8300	.1330
-"""
-spx_chain_dtes = 44.0
-spot_spx = 7786.00
-spot_vix = 0.1425
-strikes = []
-ivs = []
+    # Start the timer
+    start_time = time.perf_counter()
 
-for row in spx_chain_data.strip().split('\n'):
-    strike, iv = row.split('\t')
-    strikes.append(float(strike))
-    ivs.append(float(iv))
+    for row in spx_chain_data.strip().split('\n'):
+        strike, iv = row.split('\t')
+        strikes.append(float(strike))
+        ivs.append(float(iv))
 
-svi = DynamicSVI(np.array(strikes), np.array(ivs), spot_spx, spx_chain_dtes / 365)
-svcj = SVCJSimulation()
-spx, vix = svcj.generate_path(spot_spx, spot_vix)
-vix3m = svcj.derive_vix3m(vix)
-trade_strategy = ShortSPXPutStrategy(spx, vix, vix3m, svi)
-trade_strategy.run_simulation(nav=8000000, monthly_distribution=12500, notional_leverage=0.5)
+    svi = DynamicSVI(np.array(strikes), np.array(ivs), spot_spx, spx_chain_dtes / 365)
+    svcj = SVCJSimulation()
+    spx, vix = svcj.generate_path(spot_spx, spot_vix)
+    vix3m = svcj.derive_vix3m(vix)
+    trade_strategy = ShortSPXPutStrategy(spx, vix, vix3m, svi)
+    trade_strategy.run_simulation(nav=8000000, monthly_distribution=12500, notional_leverage=0.5)
+
+    # Calculate elapsed time
+    end_time = time.perf_counter()
+    execution_time = end_time - start_time
+
+    print(f"Execution time: {execution_time:.3f}s")
+
+
+if __name__ == "__main__":
+    main()
+
 
 ''' 
 Further implementation roadmap:
