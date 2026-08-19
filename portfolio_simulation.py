@@ -747,4 +747,9 @@ if __name__ == "__main__":
 #     10.1 Generate the trajectories first and then run each desired
 #          portfolio configuration in parallel with the previously
 #          generated trajectories.
+# 11. Make more parametrizable choices for the SPX Short Put portfolio:
+#     11.1 Delta rolling criteria.
+#     11.2 Delta hard close criteria.
+#     11.3 Tail expiration hard close criteria.
+#     11.4 Notional leverage reduction during wade-in.
 ###############################################################################
