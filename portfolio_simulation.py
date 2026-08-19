@@ -1,3 +1,13 @@
+"""
+portfolio_simulation.py
+
+This script provides a basic simulation for Stochastic Volatility
+with Correlated Jumps (SVCJ) to be used to simulate equities
+markets to later on be integrated into a Monte Carlo simulation
+engine designed to stress test multiple trading strategies using
+Conditional Value at Risk (CVaR).
+"""
+
 import math
 import time
 
@@ -10,24 +20,24 @@ from scipy.optimize import minimize
 # 1. Black-Scholes Options Pricing and Greeks.
 # =============================================
 def norm_cdf(x):
-    '''
+    """
     Represents the cumulative distribution
     function for the normal distribution.
-    '''
+    """
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 def bs_price(spot, strike, expiration, rf_rate, sigma, is_call=False):
-    '''
+    """
     Compute an option price using the Black-Scholes-Myrton
     options pricing model.
-    '''
+    """
     print(f"""Pricing option:
                   Spot: ${spot:,.2f}
                 Strike: ${strike:,.2f}
-            Expiration: {expiration * 365.0} DTEs
-        Risk Free Rate: {rf_rate * 100:.2f}%
-    Implied Volatility: {sigma * 100:.2f}%
-              Is Call?: {is_call}""")
+            Expiration:  {expiration * 365.0:.0f} DTEs
+        Risk Free Rate:  {rf_rate * 100:.2f}%
+    Implied Volatility:  {sigma * 100:.2f}%
+              Is Call?:  {is_call}""")
 
     t = max(expiration, 1e-5)
     d1 = (np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
@@ -38,6 +48,10 @@ def bs_price(spot, strike, expiration, rf_rate, sigma, is_call=False):
 
 
 def bs_delta(spot, strike, expiration, rf_rate, sigma, is_call=False):
+    """
+    Compute an option delta using the Black-Scholes-Myrton
+    options pricing model.
+    """
     t = max(expiration, 1e-5)
     d1 = (np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
     if is_call:
@@ -49,6 +63,13 @@ def bs_delta(spot, strike, expiration, rf_rate, sigma, is_call=False):
 # 2. Dynamic Stochastic Volatility Interpolation.
 # ==================================================
 class DynamicSVI:
+    """
+    Dynamic Stochastic Volatility Interpolation
+
+    Simulates a volatility surface using a L-BFGS-B optimization
+    model fitted using real volatility smirks observed in actual
+    equities markets.
+    """
     def __init__(self, strikes_market, iv_market, spot_price, yearly_exp):
         """
         Initializes Dynamic Surface Volatility Interpolation
@@ -124,6 +145,7 @@ class SVCJSimulation:
     Stochastic Volatility with Correlated Jumps (SVCJ)
     Instituitonal parameters for S&P 500.
     """
+
     def __init__(self,
                  mu = 0.08,      # Equity drift
                  kappa = 4.5,    # VIX mean reversion speed
@@ -134,6 +156,10 @@ class SVCJSimulation:
                  mu_j = -0.05,   # Mean price jump size
                  sigma_j = 0.06, # Volatility of price jump
                  mu_v = 0.08):   # Mean variance jump size
+        """
+        Initializes the model with the canonical parameters used
+        to simulate the behavior or equities markets.
+        """
         self.mu = mu
         self.kappa = kappa
         self.theta = theta
@@ -146,6 +172,14 @@ class SVCJSimulation:
 
 
     def generate_path(self, start_spot, start_atm_iv, days=252):
+        """
+        Generates a potential market as two time series that represent
+        the underlying and its corresponding 30 forward implied volatility.
+
+          start_spot: represents the starting value of the underlying.
+        start_atm_iv: starting value of 30 IV for the underlying.
+                days: size of the simulated path in trading days.
+        """
         dt = 1.0 / 252.0
         spot = np.zeros(days)
         spot[0] = start_spot
@@ -159,7 +193,9 @@ class SVCJSimulation:
 
             # Poisson Jump
             n = np.random.poisson(self.lambda_j * dt)
-            j_s = 0; j_v = 0
+            j_s = 0
+            j_v = 0
+
             if n > 0:
                 z3 = np.random.standard_normal()
                 j_s = self.mu_j + self.sigma_j * z3
@@ -206,6 +242,25 @@ class SVCJSimulation:
 # 4. Trading simulation (Operator's Manual)
 # ==========================================
 class ShortSPXPutStrategy:
+    """
+    Represents a trading strategy involving the systematic
+    selling of SPX Put Options overlaid on top of a fixed income
+    (risk free rate) portfolio with the following operator rules:
+
+    1. Systematically sell a specific given OTM delta put options
+    2. The position size is governed by a total fraction of the
+       notional value of the put position.
+    3. When a specific delta is breach in the current options book,
+       roll the option to the next available expected expiration
+       at a credit.
+    4. If the given option book crosses a specific profit %, close the
+       existing position and redeploy a new short put position.
+    5. If the 30 IV vs 90 IV time series enter backwardation, stop
+       all shorting operations until the market comes back to a state
+       of contango.
+    6. Any short put position crossing a specific delta, will be closed
+       to avoid accumulating delta and gamma risk.
+    """
     def __init__(self,
                  spot_spx,         # Time series for SPX underlying price.
                  spot_vix,         # Time series for the spot VIX.
@@ -215,7 +270,7 @@ class ShortSPXPutStrategy:
                  inflation=0.025,  # Annualized inflation rate.
                  delta=-0.15,      # Put Delta to use when shorting.
                  dtes=45,          # Short option expirations.
-                 max_dtes=120,     # Option book maximium expiration permitted.
+                 max_dtes=135,     # Option book maximium expiration permitted.
                  take_profit=0.75, # Take profits at percentage of each premium sold.
                  full_book=True):  # Track full options book for debugging.
         print(f"""Initializing short put portfolio strategy:"
@@ -300,22 +355,20 @@ class ShortSPXPutStrategy:
 
 
     def _roll_current_option(self, cur_day, spot, atm_iv,
-                             nav, leverage, orig_price, new_expiration,
+                             position_size, orig_price, new_expiration,
                              target_profit_price):
         print(f"""Trying to roll put position with the following requirements:
               Simulation day:  {cur_day}
                         Spot: ${spot:,.2f}
                       ATM IV:  {atm_iv*100.0:.2f}%
-                         NAV: ${nav:,.2f}
-                    Leverage:  {leverage:.2f}x
+      Original Position Size:  {position_size}
           Put original price: ${orig_price:,.2f}
-              New Expiration:  {new_expiration} DTEs
+              New Expiration:  {new_expiration:.0f} DTEs
                Target Profit: ${target_profit_price:,.2f}""")
-        
+
         yearly_expiration = new_expiration/365.0
         strike, price, delta, iv = self._find_put_strike_by_price(
             spot, atm_iv, orig_price, yearly_expiration)
-        position_size = round(nav * leverage / strike / 100)
         premium = self._deploy_put(
             cur_day, strike, new_expiration, delta, iv,
             price, position_size, target_profit_price)
@@ -329,9 +382,9 @@ class ShortSPXPutStrategy:
                    Spot: ${spot:,.2f}
                  ATM IV:  {atm_iv*100.0:.2f}%
                     NAV: ${nav:,.2f}
-               Leverage:  {leverage}x
-                  Delta:  {delta}
-             Expiration:  {expiration} DTEs
+               Leverage:  {leverage:.2f}x
+                  Delta:  {delta:.2f}
+             Expiration:  {expiration:.0f} DTEs
           Target Profit: ${target_profit:,.2f}""")
         yearly_exp = expiration / 365.0
         put_strike, put_price, _, put_iv = self._find_put_strike_by_delta(
@@ -389,10 +442,19 @@ class ShortSPXPutStrategy:
                        nav,                         # Initial portfolio NAV
                        monthly_distribution,        # Monthly withdrawals
                        notional_leverage = 0.5):    # Position size for options underwriting
+        """
+        Initialize the portfolio simulation with the given starting parameters:
+
+                         nav: Initial portfolio's Net Asset Value
+        monthly_distribution: How much money to withdraw monthly.
+           notional_leverage: Amount of leverage based on notional value on the overlaid
+                              short options position to be deployed.
+        """
+
         print(f"""Initiating path simulation with the following parameters:
                Initial NAV: ${nav:,.2f}
         Monthly withdrawal: ${monthly_distribution:,.2f}
-         Notional leverage:  {notional_leverage}x
+         Notional leverage:  {notional_leverage:.2f}x
         """)
 
         # Technical Indicators
@@ -433,7 +495,8 @@ class ShortSPXPutStrategy:
             # VIX Term Structure Check
             backwardation = spot_vix > vix3m * 1.05 # Avoid noise
 
-            print(f"""Simulation at day {d}
+            print(f"""
+                Simulation at day:  {d}
                          SPX Spot: ${spot:,.2f}
                               VIX:  {spot_vix*100:.2f}%
                            VIX 3M:  {vix3m*100:.2f}%
@@ -441,6 +504,9 @@ class ShortSPXPutStrategy:
                              Cash: ${cash:,.2f}
                               NAV: ${nav:,.2f}
                     Options state:  {state}""")
+
+            buy_to_close = False
+            roll_option = False
 
             # TRIPLE-LOCK COOLDOWN RE-ENTRY
             if state == 'cooldown':
@@ -472,9 +538,6 @@ class ShortSPXPutStrategy:
                 book_put_price = bs_price(spot, put_strike, put_exp, r, book_put_iv, False)
                 book_put_delta = bs_delta(spot, put_strike, put_exp, r, book_put_iv, False)
 
-                buy_to_close = False
-                roll_option = False
-
                 # Operator's Decision Tree:
                 # Option 1:
                 #  If the VIX is in backwardation with VIX3M
@@ -491,7 +554,7 @@ class ShortSPXPutStrategy:
                 #
                 #  Similar to the backwardation case, enter a cooldown
                 #  period to avoid taking more risk.
-                #  TODO: Revise this rule with CVaR calculations.
+                #  TODO: Revise the cooldown rule with CVaR calculations.
                 #        It feels overly conservative.
                 elif book_put_delta <= -0.50:
                     buy_to_close = True
@@ -522,6 +585,8 @@ class ShortSPXPutStrategy:
                     buy_to_close = True # 7-DTE HARD DECK (Gamma Risk Eject)
 
                 if buy_to_close:
+                    assert not roll_option
+                    print("Trying to close option (not roll)")
                     book_close_cost = book_put_price * put_size * 100
                     profit = (put_orig_price - book_put_price) * put_size * 100
                     self._rebuy_put(d, put_strike, last_book_entry[2],
@@ -539,17 +604,43 @@ class ShortSPXPutStrategy:
                             current_leverage, self.delta, self.dtes)
 
                 if roll_option:
+                    assert not buy_to_close
+                    print("Trying to roll current options position")
                     book_close_cost = book_put_price * put_size * 100
                     profit = (put_orig_price - book_put_price) * put_size * 100
                     self._rebuy_put(d, put_strike, last_book_entry[2],
                                     book_put_delta, book_put_iv, book_put_price,
                                     put_size, -book_close_cost, profit)
-                    new_expiration = last_book_entry[2] + last_book_entry[0] + self.dtes
+
+                    prev_cash = cash
+                    cash -= book_close_cost
+
+                    print(f"""Deducting option book buy to close and roll:
+                    Cash before trade: ${prev_cash:,.2f}
+                     Cash after trade: ${cash:,.2f}""")
+
+                    remaining_exp = last_book_entry[2] + last_book_entry[0] - d
+                    new_expiration = last_book_entry[2] + self.dtes
+
                     if new_expiration < self.limit_dtes:
-                        self._roll_current_option(d, spot, spot_vix, nav,
-                                                  current_leverage, book_put_price,
-                                                  new_expiration,
-                                                  put_orig_price * (1.0 - self.take_profit))
+                        cash += self._roll_current_option(
+                            d, spot, spot_vix, put_size,
+                            book_put_price, new_expiration,
+                            put_orig_price * (1.0 - self.take_profit))
+                        print(f"""
+                     Rolled option remaining: {remaining_exp:.0f} DTEs
+                    New put expiration to be: {new_expiration:.0f} DTEs
+                            Expiration limit: {self.limit_dtes:.0f} DTEs""")
+                    else:
+                        print(f"""
+                        Current options position exceeded the expiration
+                        limit permitted of {self.limit_dtes:.0f} DTEs.
+                        Selling new option instead.
+                        """)
+                        cash += self._sell_put(
+                            d, spot, spot_vix, nav,
+                            current_leverage, self.delta, self.dtes)
+
 
             # Reinvest (or subtract) new cash flows.
             if abs(cash) > 0.01:
@@ -571,6 +662,10 @@ class ShortSPXPutStrategy:
 #       Aug 15th 2026.
 # ============================================
 def main():
+    """
+    Simulation entry point.
+    """
+
     spx_chain_data = """
     6900	.2283
     7200	.1907
@@ -623,26 +718,33 @@ if __name__ == "__main__":
 ###############################################################################
 # Further implementation roadmap:
 #
-# 1. Finish the rolling trade logic to properly simulate the delta 0.35
-#    roll at a credit scenario.
-# 2. Spot check the IV of further expiration options and confirm
-#    they make sense.
-# 3. Implement a stopgap condition to avoid rolling indefinitely.
-# 4. Implement a stitchable segment simulation architecture
-#    4.1 First, make sure every individual simulation records their terminal
-#        NAV and IV and all the remaining positions are closed so the portfolio
-#        is easy to carry forward with these 2 parameters as new conditions for
-#        a subsequent simulation.
-# 5. Compute the CVaR:
-#    5.1 Sort all the terminal returns in ascending order, and compute the
-#        average returns up to the P percentile.
-#    5.2 We're interested in -15% 99-CVaR and -7% 90 CVaR (confirm this again
-#        with the LLM)
-# 6. Plot the return distributions.
-# 7. Consider alternative portfolios.
-#    7.1 15% SPY and 85% T-Bills + Short SPX puts
-#    7.2 100% T-bills and 0.75x notional SPX 5-15 delta credit spreads
-#    7.3 More short put / spreads cases varying the notional.
-#    7.3 Covered calls?
-# 8. Figure out how to discount the inflation
+#  1. Finish the rolling trade logic to properly simulate the delta 0.35
+#     roll at a credit scenario. [DONE]
+#  2. Spot check the IV of further expiration options and confirm
+#     they make sense.
+#  3. Implement a stopgap condition to avoid rolling indefinitely. [DONE]
+#  4. Implement a stitchable segment simulation architecture
+#     4.1 First, make sure every individual simulation records their terminal
+#         NAV and IV and all the remaining positions are closed so the
+#         portfolio is easy to carry forward with these 2 parameters as new
+#         conditions for a subsequent simulation.
+#  5. Compute the CVaR:
+#     5.1 Sort all the terminal returns in ascending order, and compute the
+#         average returns up to the P percentile.
+#     5.2 We're interested in -15% 99-CVaR and -7% 90 CVaR (confirm this again
+#         with the LLM)
+#  6. Plot the return distributions.
+#  7. Consider alternative portfolios.
+#     7.1 15% SPY and 85% T-Bills + Short SPX puts
+#     7.2 100% T-bills and 0.75x notional SPX 5-15 delta credit spreads
+#     7.3 Pure SPY + T-Bills combinations as portfolio benchmarks.
+#     7.3 Covered calls.
+#     7.4 Implement a tool to find the efficient frontier varying a matrix
+#         of portfolio parameters.
+#  8. Figure out how to discount the inflation
+#  9. Implement a more robust logging infrastructure.
+# 10. Portfolio comparison using the exact trajectories.
+#     10.1 Generate the trajectories first and then run each desired
+#          portfolio configuration in parallel with the previously
+#          generated trajectories.
 ###############################################################################
