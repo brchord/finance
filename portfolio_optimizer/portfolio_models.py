@@ -9,12 +9,10 @@ Conditional Value at Risk (CVaR).
 """
 
 import math
-import time
 
-import numpy as np
 import pandas as pd
 
-from ..market_modelling import black_scholes as bs
+from market_modelling import black_scholes as bs
 
 # ==========================================
 # 4. Trading simulation (Operator's Manual)

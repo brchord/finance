@@ -8,16 +8,13 @@ engine designed to stress test multiple trading strategies using
 Conditional Value at Risk (CVaR).
 """
 
-import math
 import time
 
 import numpy as np
-import pandas as pd
 
-import market_modelling.dsvi as dsvi
-import market_modelling.svcj as svcj
-
-from portfolio_models.short_spx_bond_overlay import ShortSPXPutStrategy
+from market_modelling.dsvi import DynamicSVI
+from market_modelling.svcj import SVCJSimulation
+from portfolio_models import ShortSPXPutStrategy
 
 # ============================================
 # 5. Fitting current volatility curves with
@@ -62,10 +59,10 @@ def main():
         strikes.append(float(strike))
         ivs.append(float(iv))
 
-    svi = dsvi.DynamicSVI(np.array(strikes), np.array(ivs), spot_spx, spx_chain_dtes / 365)
-    market_sim = svcj.SVCJSimulation()
-    spx, vix = market_sim.generate_path(spot_spx, spot_vix)
-    vix3m = market_sim.derive_vix3m(vix)
+    svi = DynamicSVI(np.array(strikes), np.array(ivs), spot_spx, spx_chain_dtes / 365)
+    svcj = SVCJSimulation()
+    spx, vix = svcj.generate_path(spot_spx, spot_vix)
+    vix3m = svcj.derive_vix3m(vix)
     trade_strategy = ShortSPXPutStrategy(spx, vix, vix3m, svi)
     trade_strategy.run_simulation(nav=8000000, monthly_distribution=12500, notional_leverage=0.5)
 
@@ -99,24 +96,30 @@ if __name__ == "__main__":
 #     5.2 We're interested in -15% 99-CVaR and -7% 90 CVaR (confirm this again
 #         with the LLM)
 #  6. Plot the return distributions.
-#  7. Consider alternative portfolios.
-#     7.1 15% SPY and 85% T-Bills + Short SPX puts
-#     7.2 100% T-bills and 0.75x notional SPX 5-15 delta credit spreads
-#     7.3 Pure SPY + T-Bills combinations as portfolio benchmarks.
+#  7. Build modular composable portfolios
+#     7.1 Pure long equity portfolios based on a given market path
+#         (i.e. long SPY).
+#     7.2 100% T-Bills and adjustable position sized naked short
+#         equity short put options (i.e. short SPX puts).
+#     7.2 100% T-bills and adjustable position size equity
+#         put credit spreads (i.e. short SPX Put-Credit-Spreads).
+#     7.3 100% T-Bills.  Used as baseline benchmark.
 #     7.3 Covered calls.
-#     7.4 Implement a tool to find the efficient frontier varying a matrix
-#         of portfolio parameters.
-#  8. Figure out how to discount the inflation
-#  9. Implement a more robust logging infrastructure.
-# 10. Portfolio comparison using the exact trajectories.
-#     10.1 Generate the trajectories first and then run each desired
+#     7.4 A portfolio that can produce linear combinations
+#         of the aforementioned fundamental portfolios.
+#  8. Implement a tool to find the efficient frontier varying a matrix
+#     of portfolio parameters.
+#  9. Figure out how to discount the inflation
+# 10. Implement a more robust logging infrastructure.
+# 11. Portfolio comparison using the exact trajectories.
+#     11.1 Generate the trajectories first and then run each desired
 #          portfolio configuration in parallel with the previously
 #          generated trajectories.
-# 11. Make more parametrizable choices for the SPX Short Put portfolio:
-#     11.1 Delta rolling criteria.
-#     11.2 Delta hard close criteria.
-#     11.3 Tail expiration hard close criteria.
-#     11.4 Notional leverage reduction during wade-in.
-# 12. Get rid of the hard coded array of arguments on the options book and
+# 12. Make more parametrizable choices for the SPX Short Put portfolio:
+#     12.1 Delta rolling criteria.
+#     12.2 Delta hard close criteria.
+#     12.3 Tail expiration hard close criteria.
+#     12.4 Notional leverage reduction during wade-in.
+# 13. Get rid of the hard coded array of arguments on the options book and
 #     use a dictionary instead to make the code self-documenting.
 ###############################################################################
