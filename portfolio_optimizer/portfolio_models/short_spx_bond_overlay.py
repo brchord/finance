@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pandas as pd
 
-import market_modelling.black_scholes as bs
+from ..market_modelling import black_scholes as bs
 
 # ==========================================
 # 4. Trading simulation (Operator's Manual)
