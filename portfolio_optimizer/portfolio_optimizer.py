@@ -63,8 +63,13 @@ def main():
     svcj = SVCJSimulation()
     spx, vix = svcj.generate_path(spot_spx, spot_vix)
     vix3m = svcj.derive_vix3m(vix)
-    trade_strategy = ShortSPXPutStrategy(spx, vix, vix3m, svi)
-    trade_strategy.run_simulation(nav=8000000, monthly_distribution=12500, notional_leverage=0.5)
+    trade_strategy = ShortSPXPutStrategy(
+        spot_spx=spx,
+        spot_vix=vix,
+        vix3m=vix3m,
+        svi=svi,
+        monthly_distribution=12_500)
+    trade_strategy.run_simulation(8_000_000, 252)
 
     # Calculate elapsed time
     end_time = time.perf_counter()
@@ -80,11 +85,11 @@ if __name__ == "__main__":
 ###############################################################################
 # Further implementation roadmap:
 #
-#  1. Finish the rolling trade logic to properly simulate the delta 0.35
-#     roll at a credit scenario. [DONE]
+#  1. [DONE] Finish the rolling trade logic to properly simulate the delta 0.35
+#     roll at a credit scenario.
 #  2. Spot check the IV of further expiration options and confirm
 #     they make sense.
-#  3. Implement a stopgap condition to avoid rolling indefinitely. [DONE]
+#  3. [DONE] Implement a stopgap condition to avoid rolling indefinitely. 
 #  4. Implement a stitchable segment simulation architecture
 #     4.1 First, make sure every individual simulation records their terminal
 #         NAV and IV and all the remaining positions are closed so the
@@ -97,19 +102,19 @@ if __name__ == "__main__":
 #         with the LLM)
 #  6. Plot the return distributions.
 #  7. Build modular composable portfolios
-#     7.1 Pure long equity portfolios based on a given market path
+#     7.1 [DONE] Pure long equity portfolios based on a given market path
 #         (i.e. long SPY).
-#     7.2 100% T-Bills and adjustable position sized naked short
+#     7.2 [DONE] 100% T-Bills and adjustable position sized naked short
 #         equity short put options (i.e. short SPX puts).
 #     7.2 100% T-bills and adjustable position size equity
 #         put credit spreads (i.e. short SPX Put-Credit-Spreads).
-#     7.3 100% T-Bills.  Used as baseline benchmark.
+#     7.3 [DONE] 100% T-Bills.  Used as baseline benchmark.
 #     7.3 Covered calls.
 #     7.4 A portfolio that can produce linear combinations
 #         of the aforementioned fundamental portfolios.
 #  8. Implement a tool to find the efficient frontier varying a matrix
 #     of portfolio parameters.
-#  9. Figure out how to discount the inflation
+#  9. Figure out how to discount the inflation.
 # 10. Implement a more robust logging infrastructure.
 # 11. Portfolio comparison using the exact trajectories.
 #     11.1 Generate the trajectories first and then run each desired
