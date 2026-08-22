@@ -81,12 +81,13 @@ class IBKRSPXMarketData:
             print(f"Network / Gateway Connection Error: {e.reason}")
             return {}
 
-    def _get_historical_data(self, conid, end_date: date, period="1y", candle_size="1d"):
+    def _get_historical_data(self, conid: str, end_date: date,
+                             period="1y", candle_size="1d") -> dict:
         """
         Retrieves a year historical daily candle price data
         for the given contract ID and returns it as a JSON blob.
         end_date: the last day of historical data to retrieve
-        return: A JSON list containing structured price data
+        return: A python dict containing structured price data
                 according to the IBKR Web API specification.
                 https://www.interactivebrokers.com/docs/web-api/v1/endpoints/market-data/historical-market-data
         """
@@ -129,7 +130,7 @@ class IBKRSPXMarketData:
             self.vix_contract_data = self._get_request(con_endpoint_url)
 
 
-    def spx_historical_data(self, end_date: date):
+    def spx_historical_data(self, end_date: date) -> dict:
         """
         Retrieves SPX daily historical market data for 1 year
         end_date: Date from where the data will go back in time.
@@ -138,7 +139,7 @@ class IBKRSPXMarketData:
         return self._get_historical_data(IBKRSPXMarketData.SPX_CON_ID, end_date)
 
 
-    def vix_historial_data(self, end_date: date):
+    def vix_historial_data(self, end_date: date) -> dict:
         """
         Retrieves VIX daily historical market data for 1 year
         end_date: Date from where the data will go back in time.
@@ -147,13 +148,13 @@ class IBKRSPXMarketData:
         return self._get_historical_data(IBKRSPXMarketData.VIX_CON_ID, end_date)
 
 
-    def _get_spx_spot(self):
+    def _get_spx_spot(self) -> float:
         hist_data = self._get_historical_data(
             IBKRSPXMarketData.SPX_CON_ID, date.today(), "1w", "1w")
         last_candle = hist_data["data"][-1]
         return last_candle["c"]
 
-    def _get_strike_contracts(self, spx_spot, option_type="call"):
+    def _get_strike_contracts(self, spx_spot, option_type="call") -> dict[int, str]:
         opt_contract_data = [x for x in self.spx_contract_data[0]["sections"]
                              if x["secType"] == "OPT"]
         opt_next_month = opt_contract_data[0]["months"].split(";")[1]
@@ -195,7 +196,7 @@ class IBKRSPXMarketData:
         return option_contract_map
 
 
-    def _get_live_market_data(self, conids, fields):
+    def _get_live_market_data(self, conids: list[str], fields: list[str]) -> dict:
         """
         Retrieves live market data for the given contract ids
         querying the desired field IDs.
@@ -206,7 +207,8 @@ class IBKRSPXMarketData:
         return data
 
 
-    def spx_current_option_iv_surface(self, option_type="call"):
+    def spx_current_option_iv_surface(
+            self, option_type="call") -> list[tuple[float, str]]:
         """
         Retrieves the IV smile from the closest monthly SPX options
         chain.

@@ -13,7 +13,8 @@ class DynamicSVI:
     model fitted using real volatility smirks observed in actual
     equities markets.
     """
-    def __init__(self, strikes_market, iv_market, spot_price, yearly_exp):
+    def __init__(self, strikes_market: list[float], iv_market: list[float],
+                 spot_price: float, yearly_exp: float):
         """
         Initializes Dynamic Surface Volatility Interpolation
         with data extracted from a real observed market options chain.
@@ -30,14 +31,16 @@ class DynamicSVI:
         self.shape_constant = self.b * (-self.rho * self.m + np.sqrt(self.m**2 + self.sigma**2))
 
 
-    def _fit_svi(self, k_market, iv_market, exp, initial_guess=None):
+    def _fit_svi(self, k_market: list[float], iv_market: list[float],
+                 exp: float, initial_guess=None):
         w_market = (iv_market ** 2) * exp
 
-        def svi_total_variance(params, k):
+        def svi_total_variance(params: tuple[float, float, float, float],
+                               k: float):
             a, b, rho, m, sigma = params
             return a + b * (rho * (k - m) + np.sqrt((k - m)**2 + sigma**2))
 
-        def objective(params):
+        def objective(params: tuple[float, float, float, float, float]):
             _, b, rho, _, sigma = params
             if b < 0 or abs(rho) >= 1 or sigma <= 0:
                 return 1e6
@@ -58,13 +61,14 @@ class DynamicSVI:
         result = minimize(objective, initial_guess, method='L-BFGS-B', bounds=bounds)
         return result.x
 
-    def get_iv_curve(self, simulated_atm_iv, strikes, forward, current_exp):
+    def get_iv_curve(self, atm_iv: float, strikes: list[float],
+                     forward: float, current_exp: float):
         """
-        Extrapolates the full OTM IV curve given a simulated ATM IV and the
-        current (potentially shrunk) time-to-expiry current_exp.
+        Extrapolates the full OTM IV curve given an ATM IV and the
+        current (potentially shrunk) time-to-expiration current_exp.
         """
         # 1. Convert simulated ATM IV to total variance for the current T
-        w_atm_target = (simulated_atm_iv ** 2) * current_exp
+        w_atm_target = (atm_iv ** 2) * current_exp
 
         # 2. Dynamically adjust 'a' to match the simulated ATM variance
         a_t = w_atm_target - self.shape_constant

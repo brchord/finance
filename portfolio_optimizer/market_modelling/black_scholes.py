@@ -5,14 +5,15 @@ Black-Scholes Options Pricing and Greeks.
 import math
 import numpy as np
 
-def norm_cdf(x):
+def norm_cdf(x: float):
     """
     Represents the cumulative distribution
     function for the normal distribution.
     """
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
-def option_price(spot, strike, expiration, rf_rate, sigma, is_call=False):
+def option_price(spot: float, strike: float, expiration: float,
+                 rf_rate: float, sigma: float, is_call=False):
     """
     Compute an option price using the Black-Scholes-Myrton
     options pricing model.
@@ -33,7 +34,8 @@ def option_price(spot, strike, expiration, rf_rate, sigma, is_call=False):
     return strike * np.exp(-rf_rate * t) * norm_cdf(-d2) - spot * norm_cdf(-d1)
 
 
-def option_delta(spot, strike, expiration, rf_rate, sigma, is_call=False):
+def option_delta(spot: float, strike: float, expiration: float,
+                 rf_rate: float, sigma: float, is_call=False):
     """
     Compute an option delta using the Black-Scholes-Myrton
     options pricing model.

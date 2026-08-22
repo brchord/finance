@@ -37,7 +37,7 @@ class SVCJSimulation:
         self.mu_v = mu_v
 
 
-    def generate_path(self, start_spot, start_atm_iv, days=252):
+    def generate_path(self, start_spot: float, start_atm_iv: float, days=252):
         """
         Generates a potential market as two time series that represent
         the underlying and its corresponding 30 forward implied volatility.
@@ -81,7 +81,7 @@ class SVCJSimulation:
         return spot, atm_iv
 
 
-    def derive_vix3m(self, vix_path):
+    def derive_vix3m(self, vix_path: list[float]):
         """
         Derives VIX3M path directly from a pre-calculated VIX path using affine mapping.
         """
