@@ -68,7 +68,7 @@ def main():
         spot_vix=vix,
         vix3m=vix3m,
         svi=svi,
-        monthly_distribution=12_500)
+        distribution=12_500)
     trade_strategy.run_simulation(8_000_000, 252)
 
     # Calculate elapsed time

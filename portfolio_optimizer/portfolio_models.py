@@ -1,11 +1,14 @@
 """
-portfolio_simulation.py
+portfolio_models.py
 
-This script provides a basic simulation for Stochastic Volatility
-with Correlated Jumps (SVCJ) to be used to simulate equities
-markets to later on be integrated into a Monte Carlo simulation
-engine designed to stress test multiple trading strategies using
-Conditional Value at Risk (CVaR).
+Contains a set of different models that represent well known
+investment strategies:
+
+1. Fixed Income.
+2. Long SP500.
+3. Short SPX options against a T-Bills overlay
+4. A single strategy built out of a linear combination
+   of the ones above.
 """
 
 import math
@@ -14,6 +17,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 
 from market_modelling import black_scholes as bs
+from market_modelling.dsvi import DynamicSVI
 
 class InvestmentStrategy(ABC):
     """
@@ -22,7 +26,7 @@ class InvestmentStrategy(ABC):
     a different investment strategy.
     """
     @abstractmethod
-    def run_simulation(self, initial_nav, days, daily_nav=False):
+    def run_simulation(self, initial_nav: float, days: int, daily_nav=False):
         """
         Starts the investment portfolio simulation.
         initial_nav: Portfolio's Net Asset Value.
@@ -45,9 +49,10 @@ class FixedIncomeStrategy(InvestmentStrategy):
     instrument are fully reinvested into the same asset.
     """
     def __init__(self,
-                 rate=0.03,  # Annualized interest rate
+                 rate=0.03,            # Annualized interest rate
                  compounding='daily'): # 'daily', 'monthly' or
                                        # 'continuous' compounding
+        super().__init__()
         self.rate = rate
         comp = compounding.lower()
 
@@ -57,7 +62,7 @@ class FixedIncomeStrategy(InvestmentStrategy):
         self.compounding = comp
 
 
-    def run_simulation(self, initial_nav, days, daily_nav=False):
+    def run_simulation(self, initial_nav: float, days: int, daily_nav=False):
         """Run portfolio simulation (see parent's class docstring)."""
         daily_rate = self.rate / 252.0
         monthly_rate = self.rate / 12.0
@@ -89,14 +94,15 @@ class FixedIncomeStrategy(InvestmentStrategy):
         return path
 
 
-class LongSPYStrategy:
+class LongSPYStrategy(InvestmentStrategy):
     """
     Represent a simple long SP500 investment strategy that also accounts
     for quarterly dividend distributions.
     """
     def __init__(self,
-                 spot_spx,          # Time series for SPX spot price.
-                 avg_yield=0.0105): # SP500's average dividend yield.
+                 spot_spx: list[float], # Time series for SPX spot price.
+                 avg_yield=0.0105):     # SP500's average dividend yield.
+        super().__init__()
         print(f"""Initializing long SPY portfolio strategy:
             Initial SPX Spot: {spot_spx[0]:,.2f}
       Average Dividend Yield: {avg_yield*100.0:.2f}%""")
@@ -104,7 +110,7 @@ class LongSPYStrategy:
         self.avg_yield = avg_yield
 
 
-    def run_simulation(self, initial_nav, days, daily_nav=False):
+    def run_simulation(self, initial_nav: float, days: int, daily_nav=False):
         """Run portfolio simulation (see parent's class docstring)."""
         shares = initial_nav / self.spy_spot[0]
         total_quarters = math.floor(days / 63.0)
@@ -123,7 +129,57 @@ class LongSPYStrategy:
         return path
 
 
-class ShortSPXPutStrategy:
+class CombinedPortfolioStrategy(InvestmentStrategy):
+    """
+    Computes the total return of a lineal combination of multiple
+    Investment Strategies.
+    components: list of tuples of the form (strategy, weigh) for each
+                piece of the combined portfolio
+    raises: ValueError if the weights are either negative or the total
+            portfolio weight exceeds 1.0
+    """
+    def __init__(self, components: list[tuple[InvestmentStrategy, float]]):
+        super().__init__()
+        total_weight = sum(weigh for (_, weigh) in components)
+        if len(filter(weigh for (_, weigh) in components if weigh < 0.0)) > 0:
+            raise ValueError("Negative weight for portfolio components")
+
+        if total_weight > 1.0:
+            raise ValueError("Portfolio weighs more than 100%")
+
+        if total_weight < 1.0:
+            print(f"""Warning: Portfolio components don't add to 100%,
+                  keeping the remainder {(1.0 - total_weight) * 100:.2f}%
+                  in cash""")
+        self.components = components
+
+
+    def run_simulation(self, initial_nav, days, daily_nav=False):
+        """Run portfolio simulation (see parent's class docstring)."""
+        total_weight = 0.0
+        if daily_nav:
+            result = []
+        else:
+            result = 0.0
+        for portfolio, weight in self.components:
+            total_weight += weight
+            partial = portfolio.run_simulation(
+                initial_nav * weight, days, daily_nav)
+            if daily_nav:
+                result = [x + y for (x, y) in zip(result, partial)]
+            else:
+                result += partial
+        if (1.0 - total_weight) >= 1e3:
+            rem_cash = initial_nav * (1.0 - total_weight)
+            if daily_nav:
+                result = [x + rem_cash for x in result]
+            else:
+                result += rem_cash
+
+        return result
+
+
+class ShortSPXPutStrategy(InvestmentStrategy):
     """
     Represents a trading strategy involving the systematic
     selling of SPX Put Options overlaid on top of a fixed income
@@ -145,25 +201,25 @@ class ShortSPXPutStrategy:
     """
     def __init__(self,
                  *,
-                 spot_spx,             # Time series for SPX underlying price.
-                 spot_vix,             # Time series for the spot VIX.
-                 vix3m,                # Time series for the VIX3M.
-                 svi,                  # Stochastic Volatility Inspired IV Model.
-                 monthly_distribution, # Monthly withdrawals
-                 leverage=0.5,         # Short put notional position size
-                                       # based on a percentage NAV.
-                 rf_rate=0.03,         # Annualized risk free rate.
-                 inflation=0.025,      # Annualized inflation rate.
-                 delta=-0.15,          # Put Delta to use when shorting.
-                 dtes=45,              # Short option expirations.
-                 max_dtes=135,         # Option book maximium expiration permitted.
-                 take_profit=0.75,     # Take profits at percentage of each premium sold.
-                 full_book=True):      # Track full options book for debugging.
+                 spot_spx: list[float], # Time series for SPX underlying price.
+                 spot_vix: list[float], # Time series for the spot VIX.
+                 vix3m: list[float],    # Time series for the VIX3M.
+                 svi: DynamicSVI,       # Stochastic Volatility Inspired IV Model.
+                 distribution: float,   # Monthly withdrawals
+                 leverage=0.5,          # Short put notional position size
+                                        # based on a percentage NAV.
+                 rf_rate=0.03,          # Annualized risk free rate.
+                 inflation=0.025,       # Annualized inflation rate.
+                 delta=-0.15,           # Put Delta to use when shorting.
+                 dtes=45,               # Short option expirations.
+                 max_dtes=135,          # Option book maximium expiration permitted.
+                 take_profit=0.75,      # Take profits at percentage of each premium sold.
+                 full_book=True):       # Track full options book for debugging.
         print(f"""Initializing short put portfolio strategy:"
           Initial SPX Spot: ${spot_spx[0]:,.2f}
                Initial VIX:  {math.sqrt(spot_vix[0]):.2f}%
              Initial VIX3M:  {math.sqrt(vix3m[0]):.2f}%
-       Monthly Withdrawals: ${monthly_distribution:,.2f}
+       Monthly Withdrawals: ${distribution:,.2f}
          Notional Leverage:  {leverage:.2f}x of NAV
             Risk Free Rate:  {rf_rate*100.0:.2f}%
             Inflation Rate:  {inflation*100.0:.2f}%
@@ -177,7 +233,7 @@ class ShortSPXPutStrategy:
         self.vix = spot_vix
         self.vix3m = vix3m
         self.svi = svi
-        self.monthly_dist = monthly_distribution
+        self.monthly_dist = distribution
         self.leverage = leverage
         self.risk_free_rate = rf_rate
         self.inflation = inflation
@@ -188,17 +244,20 @@ class ShortSPXPutStrategy:
         self.full_book = full_book
         self.book = []
 
-    def _find_put_strike_by_price(self, spot, atm_iv, target_price, expiration):
+    def _find_put_strike_by_price(self, spot: float, atm_iv: float,
+                                  target_price: float, expiration: float):
         return self._find_put_strike(
             spot, atm_iv, target_price, expiration, use_delta=False)
 
 
-    def _find_put_strike_by_delta(self, spot, atm_iv, target_delta, expiration):
+    def _find_put_strike_by_delta(self, spot: float, atm_iv: float,
+                                  target_delta: float, expiration: float):
         return self._find_put_strike(
             spot, atm_iv, target_delta, expiration, use_delta=True)
 
 
-    def _find_put_strike(self, spot, atm_iv, target, expiration, use_delta):
+    def _find_put_strike(self, spot: float, atm_iv: float,
+                         target: float, expiration: float, use_delta: bool):
         # Binary search to find the exact put strike that yields the target delta
         print(f"""
         Searching put option with parameters:
@@ -244,9 +303,9 @@ class ShortSPXPutStrategy:
         return round_strike * 10, price, delta, iv
 
 
-    def _roll_current_option(self, cur_day, spot, atm_iv,
-                             position_size, orig_price, new_expiration,
-                             target_profit_price):
+    def _roll_current_option(self, cur_day: int, spot: float, atm_iv: float,
+                             position_size: int, orig_price: float,
+                             new_expiration: float, target_profit_price: float):
         print(f"""Trying to roll put position with the following requirements:
               Simulation day:  {cur_day}
                         Spot: ${spot:,.2f}
@@ -265,8 +324,8 @@ class ShortSPXPutStrategy:
         return premium
 
 
-    def _sell_put(self, cur_day, spot, atm_iv, nav,
-                  leverage, delta, expiration, target_profit=0.0):
+    def _sell_put(self, cur_day: int, spot: float, atm_iv: float, nav: float,
+                  leverage: float, delta: float, expiration: float, target_profit=0.0):
         print(f"""Trying to sell put with the following requirements:
          Simulation Day:  {cur_day}
                    Spot: ${spot:,.2f}
@@ -290,8 +349,9 @@ class ShortSPXPutStrategy:
         return premium
 
 
-    def _deploy_put(self, day, strike, expiration, delta,
-                    iv, price, size, target_profit):
+    def _deploy_put(self, day: int, strike: float, expiration: float,
+                    delta: float, iv: float, price: float, size: int,
+                    target_profit: float):
         premium = size * price * 100
         print(f"""Deploying put option:
                Simulation Day:  {day}
@@ -311,9 +371,9 @@ class ShortSPXPutStrategy:
         return premium
 
 
-    def _rebuy_put(self, cur_day, put_strike, dtes,
-                   put_delta, put_iv, put_price,
-                   position_size, total_cost, final_profit):
+    def _rebuy_put(self, cur_day: int, put_strike: float, dtes: float,
+                   put_delta: float, put_iv: float, put_price: float,
+                   position_size: int, total_cost: float, final_profit: float):
         print(f"""Buying to close live options in book:
             Simulation day:  {cur_day}
                 Put strike: ${put_strike:,.2f}
@@ -328,7 +388,7 @@ class ShortSPXPutStrategy:
                           total_cost, final_profit])
 
 
-    def run_simulation(self, initial_nav, days, daily_nav=False):
+    def run_simulation(self, initial_nav: float, days: int, daily_nav=False):
         """Run portfolio simulation (see parent's class docstring)."""
         print(f"""Starting simulation, initial parameters:
             Initial NAV: ${initial_nav:,.2f}
