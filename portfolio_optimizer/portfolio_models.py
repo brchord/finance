@@ -179,75 +179,36 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         return result
 
 
-class ShortSPXPutStrategy(InvestmentStrategy):
+class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     """
-    Represents a trading strategy involving the systematic
-    selling of SPX Put Options overlaid on top of a fixed income
-    (risk free rate) portfolio with the following operator rules:
-
-    1. Systematically sell a specific given OTM delta put options
-    2. The position size is governed by a total fraction of the
-       notional value of the put position.
-    3. When a specific delta is breach in the current options book,
-       roll the option to the next available expected expiration
-       at a credit.
-    4. If the given option book crosses a specific profit %, close the
-       existing position and redeploy a new short put position.
-    5. If the 30 IV vs 90 IV time series enter backwardation, stop
-       all shorting operations until the market comes back to a state
-       of contango.
-    6. Any short put position crossing a specific delta, will be closed
-       to avoid accumulating delta and gamma risk.
+    Abstract class that encapsulates common elements on
+    short put volatility strategies.  Not meant for direct
+    instantiation but useful to share common code between
+    selling naked SPX Puts and selling SPX Put Credit
+    Spreads.
     """
     def __init__(self,
-                 *,
-                 spot_spx: list[float], # Time series for SPX underlying price.
-                 spot_vix: list[float], # Time series for the spot VIX.
-                 vix3m: list[float],    # Time series for the VIX3M.
-                 svi: DynamicSVI,       # Stochastic Volatility Inspired IV Model.
-                 distribution: float,   # Monthly withdrawals
-                 leverage=0.5,          # Short put notional position size
-                                        # based on a percentage NAV.
-                 rf_rate=0.03,          # Annualized risk free rate.
-                 inflation=0.025,       # Annualized inflation rate.
-                 delta=-0.15,           # Put Delta to use when shorting.
-                 dtes=45,               # Short option expirations.
-                 max_dtes=135,          # Option book maximium expiration permitted.
-                 take_profit=0.75,      # Take profits at percentage of each premium sold.
-                 full_book=True):       # Track full options book for debugging.
-        print(f"""Initializing short put portfolio strategy:"
-          Initial SPX Spot: ${spot_spx[0]:,.2f}
-               Initial VIX:  {math.sqrt(spot_vix[0]):.2f}%
-             Initial VIX3M:  {math.sqrt(vix3m[0]):.2f}%
-       Monthly Withdrawals: ${distribution:,.2f}
-         Notional Leverage:  {leverage:.2f}x of NAV
+                     *,
+                     spot_spx: list[float], # Time series for SPX underlying price.
+                     spot_vix: list[float], # Time series for the spot VIX.
+                     vix3m: list[float],    # Time series for the VIX3M.
+                     svi: DynamicSVI,       # Stochastic Volatility Inspired IV Model.
+                     rf_rate=0.03,          # Annualized risk free rate.
+                     full_book=True):       # Track full options book for debugging.
+        print(f"""Initializing SPX put portfolio strategy:"
+            Initial SPX Spot: ${spot_spx[0]:,.2f}
+                Initial VIX:  {math.sqrt(spot_vix[0]):.2f}%
+                Initial VIX3M:  {math.sqrt(vix3m[0]):.2f}%
             Risk Free Rate:  {rf_rate*100.0:.2f}%
-            Inflation Rate:  {inflation*100.0:.2f}%
-              Option Delta:  {delta:.2f}
-         Option Expiration:  {dtes:.0f} DTEs
-       Maximium Expiration:  {max_dtes:.0f} DTEs
-           Take profits at:  {take_profit*100:.2f}% of premium sold
         Track Options Book:  {full_book}
         """)
         self.spot = spot_spx
         self.vix = spot_vix
         self.vix3m = vix3m
         self.svi = svi
-        self.monthly_dist = distribution
-        self.leverage = leverage
         self.risk_free_rate = rf_rate
-        self.inflation = inflation
-        self.delta = delta
-        self.dtes = dtes
-        self.limit_dtes = max_dtes
-        self.take_profit = take_profit
         self.full_book = full_book
         self.book = []
-
-    def _find_put_strike_by_price(self, spot: float, atm_iv: float,
-                                  target_price: float, expiration: float):
-        return self._find_put_strike(
-            spot, atm_iv, target_price, expiration, use_delta=False)
 
 
     def _find_put_strike_by_delta(self, spot: float, atm_iv: float,
@@ -303,29 +264,9 @@ class ShortSPXPutStrategy(InvestmentStrategy):
         return round_strike * 10, price, delta, iv
 
 
-    def _roll_current_option(self, cur_day: int, spot: float, atm_iv: float,
-                             position_size: int, orig_price: float,
-                             new_expiration: float, target_profit_price: float):
-        print(f"""Trying to roll put position with the following requirements:
-              Simulation day:  {cur_day}
-                        Spot: ${spot:,.2f}
-                      ATM IV:  {atm_iv*100.0:.2f}%
-      Original Position Size:  {position_size}
-          Put original price: ${orig_price:,.2f}
-              New Expiration:  {new_expiration:.0f} DTEs
-               Target Profit: ${target_profit_price:,.2f}""")
-
-        yearly_expiration = new_expiration/365.0
-        strike, price, delta, iv = self._find_put_strike_by_price(
-            spot, atm_iv, orig_price, yearly_expiration)
-        premium = self._deploy_put(
-            cur_day, strike, new_expiration, delta, iv,
-            price, position_size, target_profit_price)
-        return premium
-
-
-    def _sell_put(self, cur_day: int, spot: float, atm_iv: float, nav: float,
-                  leverage: float, delta: float, expiration: float, target_profit=0.0):
+    def _sell_to_open_put(self, cur_day: int, spot: float, atm_iv: float,
+                          nav: float, leverage: float, delta: float,
+                          expiration: float, target_profit_pct: float):
         print(f"""Trying to sell put with the following requirements:
          Simulation Day:  {cur_day}
                    Spot: ${spot:,.2f}
@@ -334,26 +275,23 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                Leverage:  {leverage:.2f}x
                   Delta:  {delta:.2f}
              Expiration:  {expiration:.0f} DTEs
-          Target Profit: ${target_profit:,.2f}""")
+         Target Profit%:  {target_profit_pct:.2f}%""")
         yearly_exp = expiration / 365.0
         put_strike, put_price, _, put_iv = self._find_put_strike_by_delta(
             spot, atm_iv, delta, yearly_exp)
         position_size = round(nav * leverage / put_strike / 100)
-
-        if abs(target_profit) < 1e-2:
-            target_profit = put_price * (1.0 - self.take_profit)
-
-        premium = self._deploy_put(
+        target_profit = (1.0 - target_profit_pct) * put_price
+        premium = self._write_put_to_book(
             cur_day, put_strike, expiration, delta, put_iv,
             put_price, position_size, target_profit)
         return premium
 
 
-    def _deploy_put(self, day: int, strike: float, expiration: float,
-                    delta: float, iv: float, price: float, size: int,
-                    target_profit: float):
+    def _write_put_to_book(self, day: int, strike: float, expiration: float,
+                           delta: float, iv: float, price: float, size: int,
+                           target_profit: float):
         premium = size * price * 100
-        print(f"""Deploying put option:
+        print(f"""Recording short put option in book:
                Simulation Day:  {day}
                        Strike: ${strike:,.2f}
                    Expiration:  {expiration:,.0f} DTEs
@@ -371,9 +309,9 @@ class ShortSPXPutStrategy(InvestmentStrategy):
         return premium
 
 
-    def _rebuy_put(self, cur_day: int, put_strike: float, dtes: float,
-                   put_delta: float, put_iv: float, put_price: float,
-                   position_size: int, total_cost: float, final_profit: float):
+    def _buy_to_close_put(self, cur_day: int, put_strike: float, dtes: float,
+                          put_delta: float, put_iv: float, put_price: float,
+                          position_size: int, total_cost: float, final_profit: float):
         print(f"""Buying to close live options in book:
             Simulation day:  {cur_day}
                 Put strike: ${put_strike:,.2f}
@@ -386,6 +324,101 @@ class ShortSPXPutStrategy(InvestmentStrategy):
         self.book.append([cur_day, put_strike, dtes, put_delta,
                           put_iv, put_price, position_size,
                           total_cost, final_profit])
+
+
+    @abstractmethod
+    def run_simulation(self, initial_nav, days, daily_nav=False):
+        """Run portfolio simulation (see parent's class docstring)."""
+        return super().run_simulation(initial_nav, days, daily_nav)
+
+
+class ShortSPXPutStrategy(SPXPutOptionStrategy):
+    """
+    Represents a trading strategy involving the systematic
+    selling of SPX Put Options overlaid on top of a fixed income
+    (risk free rate) portfolio with the following operator rules:
+
+    1. Systematically sell a specific given OTM delta put options
+    2. The position size is governed by a total fraction of the
+       notional value of the put position.
+    3. When a specific delta is breach in the current options book,
+       roll the option to the next available expected expiration
+       at a credit.
+    4. If the given option book crosses a specific profit %, close the
+       existing position and redeploy a new short put position.
+    5. If the 30 IV vs 90 IV time series enter backwardation, stop
+       all shorting operations until the market comes back to a state
+       of contango.
+    6. Any short put position crossing a specific delta, will be closed
+       to avoid accumulating delta and gamma risk.
+    """
+    def __init__(self,
+                 *,
+                 spot_spx: list[float], # Time series for SPX underlying price.
+                 spot_vix: list[float], # Time series for the spot VIX.
+                 vix3m: list[float],    # Time series for the VIX3M.
+                 svi: DynamicSVI,       # Stochastic Volatility Inspired IV Model.
+                 distribution: float,   # Monthly withdrawals
+                 leverage=0.5,          # Short put notional position size
+                                        # based on a percentage NAV.
+                 rf_rate=0.03,          # Annualized risk free rate.
+                 inflation=0.025,       # Annualized inflation rate.
+                 delta=-0.15,           # Put Delta to use when shorting.
+                 dtes=45,               # Short option expirations.
+                 max_dtes=135,          # Option book maximium expiration permitted.
+                 take_profit=0.75,      # Take profits at percentage of each premium sold.
+                 full_book=True):       # Track full options book for debugging.
+        super().__init__(
+            spot_spx=spot_spx,
+            spot_vix=spot_vix,
+            vix3m=vix3m,
+            svi=svi,
+            rf_rate=rf_rate,
+            full_book=full_book)
+
+        print(f"""Initializing short put portfolio strategy:"
+       Monthly Withdrawals: ${distribution:,.2f}
+         Notional Leverage:  {leverage:.2f}x of NAV
+            Inflation Rate:  {inflation*100.0:.2f}%
+              Option Delta:  {delta:.2f}
+         Option Expiration:  {dtes:.0f} DTEs
+       Maximium Expiration:  {max_dtes:.0f} DTEs
+           Take profits at:  {take_profit*100:.2f}% of premium sold
+        """)
+        self.monthly_dist = distribution
+        self.leverage = leverage
+        self.inflation = inflation
+        self.delta = delta
+        self.dtes = dtes
+        self.limit_dtes = max_dtes
+        self.take_profit = take_profit
+
+
+    def _find_put_strike_by_price(self, spot: float, atm_iv: float,
+                                  target_price: float, expiration: float):
+        return self._find_put_strike(
+            spot, atm_iv, target_price, expiration, use_delta=False)
+
+
+    def _roll_current_put_position(self, cur_day: int, spot: float, atm_iv: float,
+                                   position_size: int, orig_price: float,
+                                   new_expiration: float, target_profit_price: float):
+        print(f"""Trying to roll put position with the following requirements:
+              Simulation day:  {cur_day}
+                        Spot: ${spot:,.2f}
+                      ATM IV:  {atm_iv*100.0:.2f}%
+      Original Position Size:  {position_size}
+          Put original price: ${orig_price:,.2f}
+              New Expiration:  {new_expiration:.0f} DTEs
+               Target Profit: ${target_profit_price:,.2f}""")
+
+        yearly_expiration = new_expiration/365.0
+        strike, price, delta, iv = self._find_put_strike_by_price(
+            spot, atm_iv, orig_price, yearly_expiration)
+        premium = self._write_put_to_book(
+            cur_day, strike, new_expiration, delta, iv,
+            price, position_size, target_profit_price)
+        return premium
 
 
     def run_simulation(self, initial_nav: float, days: int, daily_nav=False):
@@ -405,9 +438,10 @@ class ShortSPXPutStrategy(InvestmentStrategy):
         current_leverage = self.leverage
         nav = initial_nav
 
-        cash = self._sell_put(
-            0, self.spot[0], math.sqrt(self.vix[0]), nav,
-            current_leverage, self.delta, self.dtes)
+        cash = self._sell_to_open_put(
+            0, self.spot[0], math.sqrt(self.vix[0]),
+            nav, current_leverage, self.delta,
+            self.dtes, self.take_profit)
 
         print(f"""First short put trade:
              Initial cash after trade: ${cash:,.2f}""")
@@ -459,9 +493,10 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                     # Deploy a given Delta Put with
                     # the specified DTEs.
                     prev_cash = cash
-                    cash += self._sell_put(
+                    cash += self._sell_to_open_put(
                         d, spot, spot_vix, nav,
-                        current_leverage, self.delta, self.dtes)
+                        current_leverage, self.delta, self.dtes,
+                        self.take_profit)
                     print(f"""New short put trade:
                     Cash before trade: ${prev_cash:,.2f}
                      Cash after trade: ${cash:,.2f}""")
@@ -531,9 +566,10 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                     print("Trying to close option (not roll)")
                     book_close_cost = book_put_price * put_size * 100
                     profit = (put_orig_price - book_put_price) * put_size * 100
-                    self._rebuy_put(d, put_strike, last_book_entry[2],
-                                    book_put_delta, book_put_iv, book_put_price,
-                                    put_size, -book_close_cost, profit)
+                    self._buy_to_close_put(
+                        d, put_strike, last_book_entry[2], book_put_delta,
+                        book_put_iv, book_put_price, put_size,
+                        -book_close_cost, profit)
                     prev_cash = cash
                     cash -= book_close_cost
                     print(f"""Deducting option book buy to close:
@@ -541,18 +577,19 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                      Cash after trade: ${cash:,.2f}""")
 
                     if state != 'cooldown':
-                        cash += self._sell_put(
+                        cash += self._sell_to_open_put(
                             d, spot, spot_vix, nav,
-                            current_leverage, self.delta, self.dtes)
+                            current_leverage, self.delta,
+                            self.dtes, self.take_profit)
 
                 if roll_option:
                     assert not buy_to_close
                     print("Trying to roll current options position")
                     book_close_cost = book_put_price * put_size * 100
                     profit = (put_orig_price - book_put_price) * put_size * 100
-                    self._rebuy_put(d, put_strike, last_book_entry[2],
-                                    book_put_delta, book_put_iv, book_put_price,
-                                    put_size, -book_close_cost, profit)
+                    self._buy_to_close_put(
+                        d, put_strike, last_book_entry[2], book_put_delta,
+                        book_put_iv, book_put_price, put_size, -book_close_cost, profit)
 
                     prev_cash = cash
                     cash -= book_close_cost
@@ -565,7 +602,7 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                     new_expiration = last_book_entry[2] + self.dtes
 
                     if new_expiration < self.limit_dtes:
-                        cash += self._roll_current_option(
+                        cash += self._roll_current_put_position(
                             d, spot, spot_vix, put_size,
                             book_put_price, new_expiration,
                             put_orig_price * (1.0 - self.take_profit))
@@ -579,9 +616,10 @@ class ShortSPXPutStrategy(InvestmentStrategy):
                         limit permitted of {self.limit_dtes:.0f} DTEs.
                         Selling new option instead.
                         """)
-                        cash += self._sell_put(
+                        cash += self._sell_to_open_put(
                             d, spot, spot_vix, nav,
-                            current_leverage, self.delta, self.dtes)
+                            current_leverage, self.delta,
+                            self.dtes, self.take_profit)
 
 
             # Reinvest (or subtract) new cash flows.
