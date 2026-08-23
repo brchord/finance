@@ -214,8 +214,13 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         self.vix3m = vix3m
         self.svi = svi
         self.risk_free_rate = rf_rate
-        self.full_book = full_book
-        self.book = []
+        self.live_options_book = {
+            'sto': [],
+            'bto': []
+        }
+
+        if full_book:
+            self.options_trade_book = []
 
 
     def _find_put_strike_by_delta(self, spot: float, atm_iv: float,
@@ -342,7 +347,22 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         if pnl:
             book_entry["pnl"] = pnl
 
-        self.book.append(book_entry)
+        if trade == 'bto':
+            assert len(self.live_options_book['bto']) == 0
+            self.live_options_book['bto'].append(book_entry)
+        if trade == 'sto':
+            assert len(self.live_options_book['sto']) == 0
+            self.live_options_book['sto'].append(book_entry)
+        if trade == 'btc':
+            assert len(self.live_options_book['sto']) == 1
+            self.live_options_book['sto'].clear()
+        if trade == 'stc':
+            assert len(self.live_options_book['bto']) == 1
+            self.live_options_book['bto'].clear()
+
+        if self.options_trade_book:
+            self.options_trade_book.append(book_entry)
+
         return debit_credit
 
 
@@ -542,7 +562,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
             if state in ['active', 'wade_in']:
                 # Get the latest entry in the option ledger.
-                lbe = self.book[-1]
+                lbe = self.live_options_book['sto'][0]
                 put_strike = lbe["strike"]
                 put_orig_price = lbe["price"]
                 put_size = lbe["size"]
@@ -673,8 +693,28 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             if daily_nav:
                 return_path.append(nav)
 
-        # TODO: In order to make this portfolio stitchable, we need to close
-        #       all live option positions at the end of the simulation.
-        #       Need a future commit to address this.
+        # In order to make this portfolio stitchable, we need to close
+        # all live option positions at the end of the simulation.
+        if len(self.live_options_book['sto']) == 1:
+            print("Closing remaining live short options:")
+            # TODO: Consider integrating all this logic in the private
+            #       method _buy_to_close_put
+            lbe = self.live_options_book['sto'][0]
+            strike = lbe["strike"]
+            exp = lbe["expiration"] + lbe["day"] + 1 - days
+            yr_exp = exp/365.0
+            vix = self.vix[-1]
+            spx = self.spot[-1]
+            r = self.risk_free_rate
+            book_put_iv = self.svi.get_iv_curve(vix, strike, spx, yr_exp)
+            book_put_price = bs.option_price(spot, strike, yr_exp, r, book_put_iv, False)
+            book_put_delta = bs.option_delta(spot, strike, yr_exp, r, book_put_iv, False)
+            debit = self._buy_to_close_put(days - 1, strike, exp, book_put_delta,
+                                           book_put_iv, book_put_price,
+                                           lbe["size"], lbe["price"])
+            if daily_nav:
+                return_path[-1] += debit
+            else:
+                nav += debit
 
         return return_path if daily_nav else nav
