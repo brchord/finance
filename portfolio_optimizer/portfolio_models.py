@@ -187,6 +187,13 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     selling naked SPX Puts and selling SPX Put Credit
     Spreads.
     """
+    _option_trade_name_map = {
+        "btc": "Buy to close",
+        "bto": "Buy to open",
+        "stc": "Sell to close",
+        "sto": "Sell to open"
+    }
+
     def __init__(self,
                      *,
                      spot_spx: list[float], # Time series for SPX underlying price.
@@ -281,37 +288,67 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
             spot, atm_iv, delta, yearly_exp)
         position_size = round(nav * leverage / put_strike / 100)
         target_profit = (1.0 - target_profit_pct) * put_price
-        premium = self._write_put_to_book(
-            cur_day, put_strike, expiration, delta, put_iv,
-            put_price, position_size, target_profit)
-        return premium
+        return self._write_put_trade_to_book(
+            day=cur_day, trade='sto', strike=put_strike, expiration=expiration,
+            delta=delta, iv=put_iv, price=put_price,
+            size=position_size, target_profit=target_profit)
 
 
-    def _write_put_to_book(self, day: int, strike: float, expiration: float,
-                           delta: float, iv: float, price: float, size: int,
-                           target_profit: float):
-        premium = size * price * 100
-        print(f"""Recording short put option in book:
+    def _write_put_trade_to_book(self, *,
+            day: int, trade: str, strike: float, expiration: float,
+            delta: float, iv: float, price: float, size: int,
+            target_profit=None, pnl=None):
+        trade = trade.lower()
+        assert trade in SPXPutOptionStrategy._option_trade_name_map
+        trade_str = SPXPutOptionStrategy._option_trade_name_map[trade]
+
+        if trade in ['sto']:
+            assert target_profit
+
+        if trade in ['btc', 'stc']:
+            assert pnl
+
+        debit_credit = size * price * 100
+        if trade in ['bto', 'btc']:
+            debit_credit *= -1.0
+
+        print(f"""Recording option trade in book:
                Simulation Day:  {day}
+                        Trade:  {trade_str}
                        Strike: ${strike:,.2f}
                    Expiration:  {expiration:,.0f} DTEs
                         Delta:  {delta:.2f}
                            IV:  {iv*100.0:.2f}%
                         Price: ${price:,.2f}
                 Position size:  {size}
-                Total premium: ${premium:,.2f}
-                Target profit: ${target_profit:,.2f}
-                """)
+           Total debit/credit: ${debit_credit:,.2f}""")
+        if target_profit:
+            print(f"                Target profit: ${target_profit:,.2f}")
+        if pnl:
+            print(f"                          PnL: ${pnl:,.2f}")
 
         # Trade day, Put strike, Initial Expiration, Delta, IV, Price, Size, Total Premium
-        self.book.append([day, strike, expiration, delta, iv,
-                          price, size, premium, target_profit])
-        return premium
+        book_entry =  {
+            "day": day,
+            "strike": strike,
+            "expiration": expiration,
+            "delta": delta,
+            "iv": iv,
+            "price": price,
+            "size": size
+        }
+        if target_profit:
+            book_entry["target_profit"] = target_profit
+        if pnl:
+            book_entry["pnl"] = pnl
+
+        self.book.append(book_entry)
+        return debit_credit
 
 
     def _buy_to_close_put(self, cur_day: int, put_strike: float, dtes: float,
                           put_delta: float, put_iv: float, put_price: float,
-                          position_size: int, total_cost: float, final_profit: float):
+                          position_size: int, orig_price: float):
         print(f"""Buying to close live options in book:
             Simulation day:  {cur_day}
                 Put strike: ${put_strike:,.2f}
@@ -319,11 +356,12 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
          Current put delta:  {put_delta:.2f}
             Current put IV:  {put_iv:.2f}
          Current put price: ${put_price:,.2f}
-                     Units:  {position_size}
-           Cash withdrawal: ${total_cost:,.2f}""")
-        self.book.append([cur_day, put_strike, dtes, put_delta,
-                          put_iv, put_price, position_size,
-                          total_cost, final_profit])
+                     Units:  {position_size}""")
+        pnl = (orig_price - put_price) * position_size * 100
+        return self._write_put_trade_to_book(
+            day=cur_day, trade='btc', strike=put_strike,
+            expiration=dtes, delta=put_delta, iv=put_iv, price=put_price,
+            size=position_size, pnl=pnl)
 
 
     @abstractmethod
@@ -415,9 +453,10 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
         yearly_expiration = new_expiration/365.0
         strike, price, delta, iv = self._find_put_strike_by_price(
             spot, atm_iv, orig_price, yearly_expiration)
-        premium = self._write_put_to_book(
-            cur_day, strike, new_expiration, delta, iv,
-            price, position_size, target_profit_price)
+        premium = self._write_put_trade_to_book(
+            day=cur_day, trade='sto', strike=strike, expiration=new_expiration,
+            delta=delta, iv=iv, price=price, size=position_size,
+            target_profit=target_profit_price)
         return premium
 
 
@@ -502,13 +541,15 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                      Cash after trade: ${cash:,.2f}""")
 
             if state in ['active', 'wade_in']:
-                # Price the latest options in the book
-                last_book_entry = self.book[-1]
-                put_strike = last_book_entry[1]
-                put_orig_price = last_book_entry[5]
-                put_size = last_book_entry[6]
-                put_dtes = last_book_entry[2] + last_book_entry[0] - d
-                put_target_profit = last_book_entry[8]
+                # Get the latest entry in the option ledger.
+                lbe = self.book[-1]
+                put_strike = lbe["strike"]
+                put_orig_price = lbe["price"]
+                put_size = lbe["size"]
+                put_dtes = lbe["expiration"] + lbe["day"] - d
+                put_target_profit = lbe["target_profit"]
+                assert put_target_profit
+
                 put_exp = max(put_dtes,1)/365.0
 
                 book_put_iv = self.svi.get_iv_curve(spot_vix, put_strike, spot, put_exp)
@@ -564,14 +605,12 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 if buy_to_close:
                     assert not roll_option
                     print("Trying to close option (not roll)")
-                    book_close_cost = book_put_price * put_size * 100
-                    profit = (put_orig_price - book_put_price) * put_size * 100
-                    self._buy_to_close_put(
-                        d, put_strike, last_book_entry[2], book_put_delta,
-                        book_put_iv, book_put_price, put_size,
-                        -book_close_cost, profit)
+                    book_debit = self._buy_to_close_put(
+                        d, put_strike, lbe["expiration"],
+                        book_put_delta, book_put_iv, book_put_price,
+                        put_size, put_orig_price)
                     prev_cash = cash
-                    cash -= book_close_cost
+                    cash += book_debit
                     print(f"""Deducting option book buy to close:
                     Cash before trade: ${prev_cash:,.2f}
                      Cash after trade: ${cash:,.2f}""")
@@ -585,21 +624,19 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 if roll_option:
                     assert not buy_to_close
                     print("Trying to roll current options position")
-                    book_close_cost = book_put_price * put_size * 100
-                    profit = (put_orig_price - book_put_price) * put_size * 100
-                    self._buy_to_close_put(
-                        d, put_strike, last_book_entry[2], book_put_delta,
-                        book_put_iv, book_put_price, put_size, -book_close_cost, profit)
+                    book_debit = self._buy_to_close_put(
+                        d, put_strike, lbe["expiration"], book_put_delta,
+                        book_put_iv, book_put_price, put_size, put_orig_price)
 
                     prev_cash = cash
-                    cash -= book_close_cost
+                    cash += book_debit
 
                     print(f"""Deducting option book buy to close and roll:
                     Cash before trade: ${prev_cash:,.2f}
                      Cash after trade: ${cash:,.2f}""")
 
-                    remaining_exp = last_book_entry[2] + last_book_entry[0] - d
-                    new_expiration = last_book_entry[2] + self.dtes
+                    remaining_exp = lbe["expiration"] + lbe["day"] - d
+                    new_expiration = lbe["expiration"] + self.dtes
 
                     if new_expiration < self.limit_dtes:
                         cash += self._roll_current_put_position(
