@@ -14,7 +14,8 @@ import numpy as np
 
 from market_modelling.dsvi import DynamicSVI
 from market_modelling.svcj import SVCJSimulation
-from portfolio_models import ShortSPXPutStrategy
+from portfolio_models.option_models import ShortSPXPutStrategy
+from portfolio_models.option_models import SPXPutCreditSpreadStrategy
 
 # ============================================
 # 5. Fitting current volatility curves with
@@ -63,13 +64,22 @@ def main():
     svcj = SVCJSimulation()
     spx, vix = svcj.generate_path(spot_spx, spot_vix)
     vix3m = svcj.derive_vix3m(vix)
-    trade_strategy = ShortSPXPutStrategy(
+
+    spx_put_trade_strategy = ShortSPXPutStrategy(
         spot_spx=spx,
         spot_vix=vix,
         vix3m=vix3m,
         svi=svi,
         distribution=12_500)
-    trade_strategy.run_simulation(8_000_000, 252)
+    spx_pcs_trade_strategy = SPXPutCreditSpreadStrategy(
+        spot_spx=spx,
+        spot_vix=vix,
+        vix3m=vix3m,
+        svi=svi,
+        distribution=12_500
+    )
+    spx_put_trade_strategy.run_simulation(4_000_000, 252)
+    spx_pcs_trade_strategy.run_simulation(4_000_000, 252)
 
     # Calculate elapsed time
     end_time = time.perf_counter()
@@ -89,7 +99,7 @@ if __name__ == "__main__":
 #     roll at a credit scenario.
 #  2. Spot check the IV of further expiration options and confirm
 #     they make sense.
-#  3. [DONE] Implement a stopgap condition to avoid rolling indefinitely. 
+#  3. [DONE] Implement a stopgap condition to avoid rolling indefinitely.
 #  4. Implement a stitchable segment simulation architecture
 #     4.1 First, make sure every individual simulation records their terminal
 #         NAV and IV and all the remaining positions are closed so the
@@ -106,11 +116,11 @@ if __name__ == "__main__":
 #         (i.e. long SPY).
 #     7.2 [DONE] 100% T-Bills and adjustable position sized naked short
 #         equity short put options (i.e. short SPX puts).
-#     7.2 100% T-bills and adjustable position size equity
+#     7.2 [DONE] 100% T-bills and adjustable position size equity
 #         put credit spreads (i.e. short SPX Put-Credit-Spreads).
 #     7.3 [DONE] 100% T-Bills.  Used as baseline benchmark.
 #     7.3 Covered calls.
-#     7.4 A portfolio that can produce linear combinations
+#     7.4 [DONE] A portfolio that can produce linear combinations
 #         of the aforementioned fundamental portfolios.
 #  8. Implement a tool to find the efficient frontier varying a matrix
 #     of portfolio parameters.
@@ -125,6 +135,6 @@ if __name__ == "__main__":
 #     12.2 Delta hard close criteria.
 #     12.3 Tail expiration hard close criteria.
 #     12.4 Notional leverage reduction during wade-in.
-# 13. Get rid of the hard coded array of arguments on the options book and
-#     use a dictionary instead to make the code self-documenting.
+# 13. [DONE] Get rid of the hard coded array of arguments on the options
+#     book and use a dictionary instead to make the code self-documenting.
 ###############################################################################
