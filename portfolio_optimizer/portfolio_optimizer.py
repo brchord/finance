@@ -54,13 +54,17 @@ def main():
 
     # Start the timer
     start_time = time.perf_counter()
-
     for row in spx_chain_data.strip().split('\n'):
         strike, iv = row.split('\t')
         strikes.append(float(strike))
         ivs.append(float(iv))
 
     svi = DynamicSVI(np.array(strikes), np.array(ivs), spot_spx, spx_chain_dtes / 365)
+    end_time = time.perf_counter()
+    execution_time = end_time - start_time
+    print(f"SVI Execution time: {execution_time:.3f}s")
+
+    start_time = time.perf_counter()
     svcj = SVCJSimulation()
     spx, vix = svcj.generate_path(spot_spx, spot_vix)
     vix3m = svcj.derive_vix3m(vix)
@@ -85,7 +89,7 @@ def main():
     end_time = time.perf_counter()
     execution_time = end_time - start_time
 
-    print(f"Execution time: {execution_time:.3f}s")
+    print(f"Path execution time: {execution_time:.3f}s")
 
 
 if __name__ == "__main__":

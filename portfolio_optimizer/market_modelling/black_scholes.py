@@ -5,6 +5,12 @@ Black-Scholes Options Pricing and Greeks.
 import math
 import numpy as np
 
+black_scholes_verbose = False
+
+def log(s: str):
+    if black_scholes_verbose:
+        print(s)
+
 def norm_cdf(x: float):
     """
     Represents the cumulative distribution
@@ -18,7 +24,7 @@ def option_price(spot: float, strike: float, expiration: float,
     Compute an option price using the Black-Scholes-Myrton
     options pricing model.
     """
-    print(f"""Pricing option:
+    log(f"""Pricing option:
                   Spot: ${spot:,.2f}
                 Strike: ${strike:,.2f}
             Expiration:  {expiration * 365.0:.0f} DTEs
