@@ -244,7 +244,7 @@ class IBKRSPXMarketData:
         sorted_strikes = list(iv_surface.keys())
         sorted_strikes.sort()
         sorted_ivs = [iv_surface[s] for s in sorted_strikes]
-        return list(zip(sorted_strikes, sorted_ivs))
+        return spx_close, list(zip(sorted_strikes, sorted_ivs))
 
 
 def main():
@@ -279,7 +279,10 @@ def main():
             sys.exit(1)
 
         iv_surface = ibkr.spx_current_option_iv_surface(option_type=option_type)
-        print(iv_surface)
+        print(json.dumps({
+            "spot": iv_surface[0],
+            "iv_surface": iv_surface[1]
+        }))
 
 
 if __name__ == "__main__":
