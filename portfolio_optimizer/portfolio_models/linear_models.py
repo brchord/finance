@@ -27,10 +27,15 @@ class InvestmentStrategy(ABC):
 
 
     def enable_verbosity(self):
+        """
+        Whether or not print diagnostics on the
+        standard output.
+        """
         self.verbose = True
 
 
     def log(self, s: str):
+        "Simple logging"
         if self.verbose:
             print(s)
 

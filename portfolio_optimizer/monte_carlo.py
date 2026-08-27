@@ -1,3 +1,9 @@
+"""
+monte_carlo.py
+Orchestrates Monte Carlo simulation leveraging the local machine's
+concurrency.
+"""
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
@@ -5,8 +11,11 @@ from portfolio_models.linear_models import InvestmentStrategy
 
 class MonteCarloEngine:
     """
-    Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy subclass.
-    Encapsulates execution, chunking, and metric extraction within a clean object-oriented structure.
+    Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy
+    subclass.
+    
+    Encapsulates execution, chunking, and metric extraction within a clean
+    object-oriented structure.
     """
 
     def __init__(self, strategy_class: type[InvestmentStrategy], init_kwargs: dict | None = None):
@@ -25,7 +34,8 @@ class MonteCarloEngine:
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Static worker method executing a batch of paths inside a separate process.
-        Maintains picklability for ProcessPoolExecutor while avoiding standalone module-level clutter.
+        Maintains picklability for ProcessPoolExecutor while avoiding standalone
+        module-level clutter.
 
         Returns the following market metrics for each given path:
 
@@ -35,26 +45,27 @@ class MonteCarloEngine:
         4. Max drawdown.
         """
         strategy = strategy_class(**init_kwargs)
-        
+
         rng_seed = None if base_seed is None else base_seed + worker_id
         np.random.seed(rng_seed)
-        
+
         final_navs = np.empty(num_paths)
         total_returns = np.empty(num_paths)
         annualized_returns = np.empty(num_paths)
         max_drawdowns = np.empty(num_paths)
-        
+
         for i in range(num_paths):
             path_navs = strategy.run_simulation(initial_nav=initial_nav, days=days)
-            
+
             final_navs[i] = path_navs[-1]
             total_returns[i] = (path_navs[-1] - initial_nav) / initial_nav
             annualized_returns[i] = np.pow(total_returns[i], 252.0 / days)
             peak = np.maximum.accumulate(path_navs)
             drawdowns = (peak - path_navs) / peak
             max_drawdowns[i] = np.max(drawdowns)
-            
+
         return final_navs, total_returns, annualized_returns, max_drawdowns
+
 
     def run(
         self,
@@ -69,7 +80,7 @@ class MonteCarloEngine:
         """
         chunk_size = max(100, total_paths // (n_workers * 4))
         chunks = []
-        
+
         remaining_paths = total_paths
         worker_id = 0
         while remaining_paths > 0:

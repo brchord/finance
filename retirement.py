@@ -1,3 +1,8 @@
+"""
+retirement.py
+Simple retirement calculator
+"""
+
 import argparse
 import datetime
 import sys
@@ -5,38 +10,55 @@ import sys
 tax_brackets_2024 = [(0, 0.1), (11000, 0.12), (44725, 0.22),
                      (95375, 0.24), (182100, 0.32), (231250, 0.35),
                      (578125, 0.37)]
-default_deduction_2024 = 13850
+DEFAULT_DEDUCTION_2024 = 13850
 
 
 def get_federal_tax(brackets: list[tuple[int, float]], income: float) -> float:
+    """
+    Computes the total federal income tax for the given gross income.
+    """
     if income <= brackets[1][0]:
         return income * brackets[0][1]
 
     remaining = income
     total_taxes = 0
-    for i in range(len(brackets)):
+    for i, _ in enumerate(brackets):
         if i == len(brackets) - 1:
             total_taxes += remaining * brackets[i][1]
             return total_taxes
-        else:
-            if brackets[i+1][0] > income:
-                slice_tax = brackets[i][1] * remaining
-                return total_taxes + slice_tax
-            tax_slice = brackets[i + 1][0] - brackets[i][0]
-            tax_slice_amount = brackets[i][1] * tax_slice
-            remaining -= tax_slice
-            total_taxes += tax_slice_amount
+
+        if brackets[i+1][0] > income:
+            slice_tax = brackets[i][1] * remaining
+            return total_taxes + slice_tax
+
+        tax_slice = brackets[i + 1][0] - brackets[i][0]
+        tax_slice_amount = brackets[i][1] * tax_slice
+        remaining -= tax_slice
+        total_taxes += tax_slice_amount
+
+    return total_taxes
 
 
 def project_retirement(capital: int, roc: float, inflation: float, expected_income: int,
                        years_left: int, print_table=False):
+    """
+    Projects retirement numbers with the given parameters:
+            capital: Initial NAV.
+                roc: Return on capital as a rate.
+          inflation: Inflation Rate.
+    expected_income: Expected monthly distributions taken
+                     from the portfolio
+         years_left: How many more years of life expectancy are left.
+        print_table: Output a full CSV table for further analysis.
+    """
     months = years_left * 12
     monthly_roc = roc / 12.0
     monthly_payment = expected_income / 12.0
     monthly_inflation = inflation / 12.0
 
     if print_table:
-        print("Month\tYear\tMOTY\tRemaining capital\tMonthly Withdrawal\tMonthly Income,Yearly Income,Taxes Paid")
+        print("Month\tYear\tMOTY\tRemaining capital\tMonthly Withdrawal \t"
+              "Monthly Income,Yearly Income,Taxes Paid")
 
     moy = datetime.date.today().month - 1
     yearly_income = 0
@@ -47,7 +69,7 @@ def project_retirement(capital: int, roc: float, inflation: float, expected_inco
         monthly_payment *= (1.0 + monthly_inflation)
         capital = capital - (monthly_payment + taxes)
         if moy == 0 and yearly_income > 0:
-            taxes = get_federal_tax(tax_brackets_2024, yearly_income - default_deduction_2024)
+            taxes = get_federal_tax(tax_brackets_2024, yearly_income - DEFAULT_DEDUCTION_2024)
             yearly_income = 0
         else:
             taxes = 0
@@ -55,13 +77,14 @@ def project_retirement(capital: int, roc: float, inflation: float, expected_inco
         yearly_income += monthly_income
         capital += monthly_income
         if print_table:
-            print(f"{i+1}\t{int(i/12)+1}\t{moy + 1}\t{capital:.2f}\t{monthly_payment:.2f}\t{monthly_income:.2f}\t"
-                  f"{yearly_income:.2f}\t{taxes:.2f}")
+            print(f"{i+1}\t{int(i/12)+1}\t{moy + 1}\t{capital:.2f}\t{monthly_payment:.2f}\t"
+                  f"{monthly_income:.2f}\t{yearly_income:.2f}\t{taxes:.2f}")
 
     return capital
 
 
 def parse_args():
+    "Parse command line arguments using argparse."
     parser = argparse.ArgumentParser(description="Retirement calculator utility")
     parser.add_argument(
         "--roc",
@@ -109,11 +132,18 @@ def parse_args():
 
 
 def binary_search(func, guess, reverse) -> float:
+    """
+    Implements a simple binary search to find a value
+    that meets a specific predicate.
+       func: predicate
+      guess: initial value
+    reverse: search in reverse order
+    """
     epsilon = 1e-2
     max_it = 100
     top = guess
     low = 0
-    for i in range(100):
+    for _ in range(100):
         if not reverse and func(top) < 0:
             low = top
             top *= 2
@@ -121,7 +151,7 @@ def binary_search(func, guess, reverse) -> float:
             low = top
             top *= 2
 
-    for i in range(max_it):
+    for _ in range(max_it):
         v = func(top)
         print(f"Trying value: {top} resulted in {v} with top {top} and low {low}")
         if abs(v) < epsilon:
@@ -144,20 +174,23 @@ def binary_search(func, guess, reverse) -> float:
 
 def solve_for(variable: str, capital: int | None, roc: float | None,
               inflation: float | None, expenses: int | None, years: int) -> float:
+    """
+    Uses binary search to solve for a specific variable:
+    capital | roc | inflation | expenses
+    """
     if variable.lower() == 'capital':
         return binary_search(lambda x: project_retirement(x, roc, inflation, expenses, years),
                              capital, False)
-    elif variable.lower() == 'roc':
+    if variable.lower() == 'roc':
         return binary_search(lambda x: project_retirement(capital, x, inflation, expenses, years),
                              roc, False)
-    elif variable.lower() == 'inflation':
+    if variable.lower() == 'inflation':
         return binary_search(lambda x: project_retirement(capital, roc, x, expenses, years),
                              inflation, True)
-    elif variable.lower() == 'expenses':
+    if variable.lower() == 'expenses':
         return binary_search(lambda x: project_retirement(capital, roc, inflation, x, years),
                              expenses, True)
-    else:
-        raise ValueError("Invalid argument: " + variable)
+    raise ValueError("Invalid argument: " + variable)
 
 
 if __name__ == '__main__':

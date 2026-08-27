@@ -5,10 +5,11 @@ Black-Scholes Options Pricing and Greeks.
 import math
 import numpy as np
 
-black_scholes_verbose = False
+BLACK_SCHOLES_VERBOSE = False
 
 def log(s: str):
-    if black_scholes_verbose:
+    "Simple logging code"
+    if BLACK_SCHOLES_VERBOSE:
         print(s)
 
 def norm_cdf(x: float):

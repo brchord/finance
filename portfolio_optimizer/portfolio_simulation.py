@@ -9,14 +9,15 @@ import time
 import os
 
 def main():
-    prog_description = """This CLI tool examines a specified 
+    "CLI entry point"
+    prog_description = """This CLI tool examines a specified
     investment portfolio with a gamma of investment strategies and
     is capable or performing analysis by leveraging Monte Carlo simulation.
 
-    The CLI will take a number of input files that both provide data for 
-    volatility surface calibration in the case of investment strategies 
-    that involve options, the ability to feed historical market data for 
-    backtesting purposes and a combination of provided strategies to 
+    The CLI will take a number of input files that both provide data for
+    volatility surface calibration in the case of investment strategies
+    that involve options, the ability to feed historical market data for
+    backtesting purposes and a combination of provided strategies to
     construct a portfolio under analysis.
     """
     parser = argparse.ArgumentParser(description=prog_description)
@@ -38,7 +39,7 @@ def main():
                         type=int,
                         dest="rng_seed")
     parser.add_argument("-n", "--paths",
-                        help="Number of paths to simulate to run under for " 
+                        help="Number of paths to simulate to run under for "
                              "the Monte Carlo simulation. Default is 10k paths.",
                         type=int,
                         default=10000,
@@ -56,7 +57,7 @@ def main():
                         type=int,
                         default=core_count,
                         dest="concurrency")
-    
+
     args = parser.parse_args()
     # Start the timer
     start_time = time.perf_counter()
