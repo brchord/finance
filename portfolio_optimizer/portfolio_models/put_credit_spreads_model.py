@@ -260,7 +260,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
             nav = nav * (1 + r/252.0)
 
             # VIX Term Structure Check
-            backwardation = today_vix > today_vix3m * 1.05 # Avoid noise
+            backwardation = today_vix > today_vix3m
 
             self.log(f"""
                 Simulation at day:  {d}
@@ -268,6 +268,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                               VIX:  {today_vix*100:.2f}%
                            VIX 3M:  {today_vix3m*100:.2f}%
             VIX in backwardation?:  {backwardation}
+                       SPX EMA-20: ${ema20[d]:,.2f}
                              Cash: ${cash:,.2f}
                               NAV: ${nav:,.2f}
                     Options state:  {state}""")

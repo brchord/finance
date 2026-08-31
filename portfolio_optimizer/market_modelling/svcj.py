@@ -12,7 +12,8 @@ class SVCJSimulation:
     Instituitonal parameters for S&P 500.
     """
 
-    def __init__(self,
+    def __init__(self, *,
+                 seed = None,    # RNG seed
                  mu = 0.08,      # Equity drift
                  kappa = 4.5,    # VIX mean reversion speed
                  theta = 0.04,   # Long-term variance
@@ -35,6 +36,10 @@ class SVCJSimulation:
         self.mu_j = mu_j
         self.sigma_j = sigma_j
         self.mu_v = mu_v
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        else:
+            self.rng = np.random.default_rng()
 
 
     def _derive_vix3m(self, vix_path: list[float]):
@@ -77,19 +82,19 @@ class SVCJSimulation:
         atm_iv[0] = start_atm_iv * start_atm_iv
 
         for t in range(1, days):
-            z1 = np.random.standard_normal()
-            z2 = self.rho * z1 + math.sqrt(1 - self.rho**2) * np.random.standard_normal()
+            z1 = self.rng.standard_normal()
+            z2 = self.rho * z1 + math.sqrt(1 - self.rho**2) * self.rng.standard_normal()
 
             # Poisson Jump
-            n = np.random.poisson(self.lambda_j * dt)
+            n = self.rng.poisson(self.lambda_j * dt)
             j_s = 0
             j_v = 0
 
             if n > 0:
-                z3 = np.random.standard_normal()
+                z3 = self.rng.standard_normal()
                 j_s = self.mu_j + self.sigma_j * z3
                 # Variance jumps are positive and exponentially distributed
-                j_v = np.random.exponential(self.mu_v)
+                j_v = self.rng.exponential(self.mu_v)
 
             # Variance process (Euler-Maruyama, ensuring V > 0)
             v_prev = max(atm_iv[t-1], 1e-6)

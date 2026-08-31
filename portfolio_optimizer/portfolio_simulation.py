@@ -8,7 +8,6 @@ import argparse
 import datetime
 import json
 import logging
-import random
 import time
 import os
 
@@ -31,7 +30,11 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     logging.info("SVCJ parameters: [Spot SPX: %.2f, Spot VIX: %.2f, Days: %d]",
             spot_spx, spot_vix, num_days)
 
-    svcj = SVCJSimulation()
+    svcj = None
+    if config["seed"] is not None:
+        svcj = SVCJSimulation(seed=config["seed"])
+    else:
+        svcj = SVCJSimulation()
 
     spx, vix, vix3m = svcj.generate_path(spot_spx, spot_vix, num_days)
     spot_nav = portfolio.run_simulation(
@@ -231,8 +234,7 @@ def main():
     logging.info(log_msg)
 
     if args.rng_seed is not None:
-        np.random.seed(args.rng_seed)
-        random.seed(args.rng_seed)
+        logging.info("Seeding RNG with %d", args.rng_seed)
 
     # Start the timer
     init_start_time = time.perf_counter()
@@ -286,6 +288,9 @@ def main():
         "days": args.days,
         "svi": svi
     }
+    if args.rng_seed:
+        config["seed"] = args.rng_seed
+
     logging.info("Successfully loaded portfolio architecture")
 
     init_end_time = time.perf_counter()
