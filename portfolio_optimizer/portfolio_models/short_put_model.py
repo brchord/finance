@@ -48,6 +48,7 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
             'sto': [],
             'bto': []
         }
+        self.track_book = False
 
 
     def _find_put_strike_by_delta(self, spot: float, atm_iv: float,
@@ -191,8 +192,8 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
             assert len(self.live_options_book['bto']) == 1
             self.live_options_book['bto'].clear()
 
-        if self.options_trade_book:
-            self.options_trade_book.append(book_entry)
+        if self.track_book:
+            self.transaction_book.append(book_entry)
 
         return debit_credit
 
@@ -229,6 +230,7 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         days: int,                    # Days to run the simulation
         full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
+        self.track_book = full_book
         return super().run_simulation(
            spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
            svi=svi, initial_nav=initial_nav, days=days, full_book=full_book)

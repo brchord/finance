@@ -18,9 +18,6 @@ import numpy as np
 
 from market_modelling.dsvi import DynamicSVI
 
-from portfolio_models.short_put_model import ShortSPXPutStrategy
-from portfolio_models.put_credit_spreads_model import SPXPutCreditSpreadStrategy
-
 class InvestmentStrategy(ABC):
     """
     Abstract class representing a generic investment strategy.
@@ -252,6 +249,10 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
     @classmethod
     @override
     def from_json_object(cls, o):
+        from portfolio_models.short_put_model import ShortSPXPutStrategy
+        from portfolio_models.put_credit_spreads_model \
+            import SPXPutCreditSpreadStrategy
+
         if o["type"] != "CombinedPortfolioStrategy":
             return None
         models = [FixedIncomeStrategy, LongSPYStrategy,
