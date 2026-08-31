@@ -400,6 +400,12 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 self.log(f"""End of month.
                 Subtracted distribution: ${self.monthly_dist:,.2f}
                            cash balance: ${cash:,.2f}""")
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "withdrawal",
+                        "price": self.monthly_dist
+                    })
 
             if today_spot > ema20[d]:
                 days_above_ema += 1
@@ -460,6 +466,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                         Previous NAV: ${prev_nav:,.2f}
                         After-trade NAV: ${nav:,.2f}
                         Previous Cash: ${prev_cash:,.2f}""")
+
                     continue
 
                 # Get the latest entry in the option ledger.
@@ -538,12 +545,12 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                     self.log(f"""Deducting option book buy to close:
                     Cash before trade: ${prev_cash:,.2f}
                      Cash after trade: ${cash:,.2f}""")
-
                     if state != 'cooldown':
-                        cash += self._sell_to_open_put(
+                        premium = self._sell_to_open_put(
                             d, today_spot, today_vix, nav,
                             current_leverage, self.delta,
                             self.dtes, self.take_profit)
+                        cash += premium
 
                 if roll_option:
                     assert not buy_to_close

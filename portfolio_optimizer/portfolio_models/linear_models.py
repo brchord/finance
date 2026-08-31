@@ -115,6 +115,14 @@ class FixedIncomeStrategy(InvestmentStrategy):
                 current_nav *= 1 + daily_rate
             elif self.compounding == 'monthly':
                 if d % 21 == 0:
+                    # For monthly compounding, also mark
+                    # the deposit in the transaction book.
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "dividend",
+                            "price": current_nav * monthly_rate,
+                        })
                     current_nav *= 1 + monthly_rate
             else:
                 current_nav *= math.exp(self.rate / 252.0)
@@ -166,10 +174,24 @@ class LongSPYStrategy(InvestmentStrategy):
         shares = initial_nav / (spot_spx[0] / 10.0)
         quarterly_yield = self.avg_yield / 4.0
 
+        # Record the initial long equity trade
+        if full_book:
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "size": shares,
+                "price": spot_spx[0] / 10.0,
+            })
         cash = 0.0
         path = np.zeros(days)
         for d in range(0, days):
             if d % 63 == 0:
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "dividend",
+                        "price": shares * (spot_spx[d] / 10) * quarterly_yield
+                    })
                 cash += shares * quarterly_yield
             nav = shares * (spot_spx[d] / 10.0) + cash
             path[d] = nav
@@ -233,6 +255,7 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         """Run portfolio simulation (see parent's class docstring)."""
         total_weight = 0.0
         result = np.zeros(days)
+        books = []
 
         for portfolio, weight in self.components:
             total_weight += weight
@@ -241,9 +264,21 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
                 svi=svi, initial_nav=initial_nav * weight,
                 days=days, full_book=full_book)
             result += partial
+            if full_book:
+                books.append(portfolio.transaction_book())
         if (1.0 - total_weight) >= 1e3:
             rem_cash = initial_nav * (1.0 - total_weight)
             result += rem_cash
+
+        # Record all trades from all portfolios in a combined book.
+        # This is a naive implementation that merges books by linearly
+        # scanning each sub-book day by day so it's not meant for
+        # large portfolios or large scale multi-path simulations.
+        if full_book:
+            for d in range(0, days):
+                for b in books:
+                    day_trades = [entry for entry in b if entry["day"] == d]
+                    self.book.extend(day_trades)
 
         return result
 

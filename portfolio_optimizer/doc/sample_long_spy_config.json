@@ -1,0 +1,12 @@
+{
+    "type": "CombinedPortfolioStrategy",
+    "components": [
+        {
+            "portfolio": {
+                "type": "LongSPYStrategy",
+                "avg_yield": 0.0105
+            },
+            "weight": 1.0
+        }
+    ]
+}

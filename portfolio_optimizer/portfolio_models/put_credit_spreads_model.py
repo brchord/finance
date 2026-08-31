@@ -245,6 +245,12 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                 self.log(f"""End of month.
                 Subtracted distribution: ${self.monthly_dist:,.2f}
                            cash balance: ${cash:,.2f}""")
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "withdrawal",
+                        "price": -self.monthly_dist
+                    })
 
             if today_spot > ema20[d]:
                 days_above_ema += 1
