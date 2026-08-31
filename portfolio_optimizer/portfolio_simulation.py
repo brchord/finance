@@ -8,6 +8,7 @@ import argparse
 import datetime
 import json
 import logging
+import random
 import time
 import os
 
@@ -24,21 +25,21 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     "Run a single path simulation and record all transactions."
     logging.info("Executing single path simulation with full book data")
     svcj = SVCJSimulation()
-    spx, vix = svcj.generate_path(config.spx, config.vix, config.days)
+    spx, vix = svcj.generate_path(config["spx"], config["vix"], config["days"])
     vix3m = svcj.derive_vix3m(vix)
     spot_nav = portfolio.run_simulation(
         spot_spx=spx,
         spot_vix=vix,
         vix3m=vix3m,
-        svi=config.svi,
-        initial_nav=config.nav,
-        days=config.days,
+        svi=config["svi"],
+        initial_nav=config["nav"],
+        days=config["days"],
         full_book=True)
 
     transactions = portfolio.transaction_book()
 
     output = {
-        "nav_path": spot_nav,
+        "nav_path": spot_nav.tolist(),
         "transactions": transactions
     }
 
@@ -133,7 +134,7 @@ def parse_args():
     construct a portfolio under analysis.
     """
     parser = argparse.ArgumentParser(description=prog_description)
-    parser.add_argument("-s", "--iv-surface",
+    parser.add_argument("-e", "--iv-surface",
                         help="Import a JSON file that represents real market "
                              "volatility surface data, for the file format, go to "
                              "the examples subdir in this project.",
@@ -145,23 +146,22 @@ def parse_args():
                              "the file structure this tool consumes.",
                         dest="portfolio_json",
                         required=True)
-    parser.add_argument("-d, --days",
+    parser.add_argument("-o", "--output-file",
+                        help="Destination file to store simulation results in "
+                             "JSON format",
+                        dest="output_file",
+                        required=True)
+    parser.add_argument("-d", "--days",
                         help="How many days per path to simulate. Default: 252",
                         type=int,
                         default=252,
-                        dest="days",
-                        required=True)
+                        dest="days")
     parser.add_argument("-i", "--initial-nav",
                         help="NAV to start the simulation with. "
                              "Default is $1,000,000",
                         type=float,
                         default=1_000_000.00,
                         dest="initial_nav")
-    parser.add_argument("-o", "--output-file",
-                        help="Destination file to store simulation results in "
-                             "JSON format",
-                        dest="output_file",
-                        required=True)
     parser.add_argument("-r", "--random-seed",
                         help="Random number seed used to get consistent path "
                              "simulations across different runs.",
@@ -187,7 +187,7 @@ def parse_args():
                         type=int,
                         default=core_count,
                         dest="concurrency")
-    parser.add_argument("--single-path",
+    parser.add_argument("-s", "--single-path",
                         help="Executes the investment strategy simulating only one path "
                              "with full trading book data to analyze trades and returns.",
                         action="store_true",
@@ -204,6 +204,7 @@ def main():
         level=logging.INFO)
     logging.info("Starting Portfolio Simulation CLI tool.")
     args = parse_args()
+
     log_msg = f"""Parameters for the simulation:
               IV Surface File: {args.iv_surface_json}
         Portfolio Config File: {args.portfolio_json}
@@ -215,6 +216,10 @@ def main():
                   Concurrency: {args.concurrency}
        Single path simulation: {args.single_path}"""
     logging.info(log_msg)
+
+    if args.rng_seed is not None:
+        np.random.seed(args.rng_seed)
+        random.seed(args.rng_seed)
 
     # Start the timer
     init_start_time = time.perf_counter()
@@ -263,10 +268,10 @@ def main():
     config = {
         "nav": args.initial_nav,
         "conc": args.concurrency,
-        "spot": surface_spot,
+        "spx": surface_spot,
         "vix": surface_atm_iv,
-        "svi": svi,
-        "days": args.days
+        "days": args.days,
+        "svi": svi
     }
     logging.info("Successfully loaded portfolio architecture")
 
