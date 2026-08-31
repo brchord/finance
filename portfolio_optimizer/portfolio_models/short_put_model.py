@@ -167,6 +167,7 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         # Trade day, Put strike, Initial Expiration, Delta, IV, Price, Size, Total Premium
         book_entry =  {
             "day": day,
+            "trade": trade_str,
             "strike": strike,
             "expiration": expiration,
             "delta": delta,
@@ -403,7 +404,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 if full_book:
                     self.book.append({
                         "day": d,
-                        "trade": "withdrawal",
+                        "trade": "Withdrawal",
                         "price": self.monthly_dist
                     })
 
