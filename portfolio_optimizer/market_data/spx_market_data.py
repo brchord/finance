@@ -193,7 +193,7 @@ class IBKRSPXMarketData:
             curr_strike += 50.0
 
         assert len(expiration_set) == 1
-        return option_contract_map
+        return list(expiration_set)[0], option_contract_map
 
 
     def _get_live_market_data(self, conids: list[str], fields: list[str]) -> dict:
@@ -229,7 +229,7 @@ class IBKRSPXMarketData:
         spx_close = self._get_spx_spot()
         # Step 2. Query the set of strikes for the monthly option contracts
         #         of next month.
-        opt_contracts = self._get_strike_contracts(spx_close, opt_type)
+        expiration, opt_contracts = self._get_strike_contracts(spx_close, opt_type)
         # Step 3. Retrieve option contract prices
         conids = [str(x) for x in list(opt_contracts.values())]
         conid_map = {value: key for (key, value) in opt_contracts.items()}
@@ -244,7 +244,7 @@ class IBKRSPXMarketData:
         sorted_strikes = list(iv_surface.keys())
         sorted_strikes.sort()
         sorted_ivs = [iv_surface[s] for s in sorted_strikes]
-        return spx_close, list(zip(sorted_strikes, sorted_ivs))
+        return spx_close, expiration, list(zip(sorted_strikes, sorted_ivs))
 
 
 def main():
@@ -266,11 +266,11 @@ def main():
 
     if args.spx:
         spx_candles = ibkr.spx_historical_data(date.today())
-        print(spx_candles)
+        print(json.dumps(spx_candles))
 
     if args.vix:
         vix_candles = ibkr.vix_historial_data(date.today())
-        print(vix_candles)
+        print(json.dumps(vix_candles))
 
     if args.spx_iv_surface:
         option_type = args.spx_iv_surface.lower()
@@ -278,10 +278,11 @@ def main():
             print(f"Invalid option type: '{option_type}'", file=sys.stderr)
             sys.exit(1)
 
-        iv_surface = ibkr.spx_current_option_iv_surface(option_type=option_type)
+        spot, expiration, surface = ibkr.spx_current_option_iv_surface(option_type=option_type)
         print(json.dumps({
-            "spot": iv_surface[0],
-            "iv_surface": iv_surface[1]
+            "spot": spot,
+            "expiration": expiration,
+            "iv_surface": surface
         }))
 
 
