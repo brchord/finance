@@ -63,8 +63,7 @@ def main():
 
     start_time = time.perf_counter()
     svcj = SVCJSimulation()
-    spx, vix = svcj.generate_path(spot_spx, spot_vix)
-    vix3m = svcj.derive_vix3m(vix)
+    spx, vix, vix3m = svcj.generate_path(spot_spx, spot_vix)
 
     spx_put_trade_strategy = ShortSPXPutStrategy(distribution=12_500)
     spx_pcs_trade_strategy = SPXPutCreditSpreadStrategy(distribution=12_500)

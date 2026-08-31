@@ -37,6 +37,29 @@ class SVCJSimulation:
         self.mu_v = mu_v
 
 
+    def _derive_vix3m(self, vix_path: list[float]):
+        """
+        Derives VIX3M path directly from a pre-calculated VIX path using affine mapping.
+        """
+        # Helper functions for affine coefficients A(tau) and B(tau)
+        def get_a_b(tau):
+            b = (1.0 - np.exp(-self.kappa * tau)) / (self.kappa * tau)
+            a = self.theta * (1.0 - b)
+            return a, b
+
+        a30, b30 = get_a_b(30/365.0)
+        a90, b90 = get_a_b(90/365.0)
+
+        # Compute linear mapping coefficients alpha and beta
+        beta = b90 / b30
+        alpha = a90 - beta * a30
+
+        # Map VIX^2 to VIX3M^2 via linear transformation, then take the square root
+        vix3m_path = np.sqrt(alpha + beta * (vix_path ** 2))
+
+        return vix3m_path
+
+
     def generate_path(self, start_spot: float, start_atm_iv: float, days=252):
         """
         Generates a potential market as two time series that represent
@@ -78,27 +101,5 @@ class SVCJSimulation:
             spot[t] = spot[t-1] * np.exp((self.mu - 0.5 * v_prev) * dt + \
                                    math.sqrt(v_prev * dt) * z1 + j_s)
 
-        return spot, atm_iv
-
-
-    def derive_vix3m(self, vix_path: list[float]):
-        """
-        Derives VIX3M path directly from a pre-calculated VIX path using affine mapping.
-        """
-        # Helper functions for affine coefficients A(tau) and B(tau)
-        def get_a_b(tau):
-            b = (1.0 - np.exp(-self.kappa * tau)) / (self.kappa * tau)
-            a = self.theta * (1.0 - b)
-            return a, b
-
-        a30, b30 = get_a_b(30/365.0)
-        a90, b90 = get_a_b(90/365.0)
-
-        # Compute linear mapping coefficients alpha and beta
-        beta = b90 / b30
-        alpha = a90 - beta * a30
-
-        # Map VIX^2 to VIX3M^2 via linear transformation, then take the square root
-        vix3m_path = np.sqrt(alpha + beta * (vix_path ** 2))
-
-        return vix3m_path
+        vix3m = self._derive_vix3m(atm_iv)
+        return spot, np.sqrt(atm_iv), np.sqrt(vix3m)

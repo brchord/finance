@@ -24,9 +24,16 @@ logger = logging.getLogger(__name__)
 def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     "Run a single path simulation and record all transactions."
     logging.info("Executing single path simulation with full book data")
+    spot_spx = config["spx"]
+    spot_vix = config["vix"]
+    num_days = config["days"]
+
+    logging.info("SVCJ parameters: [Spot SPX: %.2f, Spot VIX: %.2f, Days: %d]",
+            spot_spx, spot_vix, num_days)
+
     svcj = SVCJSimulation()
-    spx, vix = svcj.generate_path(config["spx"], config["vix"], config["days"])
-    vix3m = svcj.derive_vix3m(vix)
+
+    spx, vix, vix3m = svcj.generate_path(spot_spx, spot_vix, num_days)
     spot_nav = portfolio.run_simulation(
         spot_spx=spx,
         spot_vix=vix,
@@ -40,6 +47,9 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
 
     output = {
         "nav_path": spot_nav.tolist(),
+        "spx": spx.tolist(),
+        "vix": vix.tolist(),
+        "vix3m": vix3m.tolist(),
         "transactions": transactions
     }
 
@@ -82,8 +92,8 @@ def run_backtest(config: dict, portfolio: lm.CombinedPortfolioStrategy):
         vix3m_final = []
         for d in sorted_days:
             spx_final.append(float(spx_dict[d]))
-            vix_final.append(float(vix_dict[d]))
-            vix3m_final.append(float(vix3m_dict[d]))
+            vix_final.append(float(vix_dict[d]) / 100.0)
+            vix3m_final.append(float(vix3m_dict[d]) / 100.0)
 
         assert len(spx_final) == len(vix_final)
         assert len(vix_final) == len(vix3m_final)
@@ -108,6 +118,9 @@ def run_backtest(config: dict, portfolio: lm.CombinedPortfolioStrategy):
 
         output = {
             "nav_path": spot_nav.tolist(),
+            "spx": spx_final,
+            "vix": vix_final,
+            "vix3m": vix3m_final,
             "transactions": transactions
         }
 
@@ -239,7 +252,7 @@ def main():
         # and separate the zipped time series (Strike, IV) into
         # independent arrays.
         surface_spot = iv_surface["spot_spx"]
-        surface_atm_iv = iv_surface["spot_vix"]
+        surface_atm_iv = iv_surface["spot_vix"] / 100.0
         today = datetime.date.today()
         exp_str = iv_surface["expiration"]
         exp_yr = int(exp_str[0:4])
@@ -253,7 +266,7 @@ def main():
         surface_ivs = np.zeros(len(surface_data))
         for i, pair in enumerate(surface_data):
             surface_strikes[i] = pair[0]
-            iv = float(pair[1][:-1])
+            iv = float(pair[1][:-1]) / 100.0
             surface_ivs[i] = iv
 
     svi = DynamicSVI(surface_strikes, surface_ivs, surface_spot, surface_expiration)
