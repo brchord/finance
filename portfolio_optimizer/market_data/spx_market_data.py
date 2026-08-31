@@ -9,6 +9,7 @@ Implied Volatility.
 """
 import argparse
 import copy
+import logging
 import json
 import math
 import ssl
@@ -18,6 +19,8 @@ import urllib.request
 
 from datetime import date
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 class IBKRSPXMarketData:
     """
@@ -49,6 +52,8 @@ class IBKRSPXMarketData:
     SPX_CON_ID = 416904
     # VIX IBKR Contract ID
     VIX_CON_ID = 13455763
+    # VIX3M IBKR Contract ID
+    VIX3M_CON_ID = 47511905
     # How far from the SPX spot (in %) to filter strikes
     # out of that range to avoid excessive IV curve skew.
     DIST_FROM_SPOT = 0.10
@@ -58,11 +63,14 @@ class IBKRSPXMarketData:
         self.ssl_context = ssl._create_unverified_context()
         self.spx_contract_data = None
         self.vix_contract_data = None
+        self.vix3m_contract_data = None
 
 
     def _get_request(self, endpoint: str) -> dict:
         """Performs an out-of-the-box REST GET request against the local IBKR gateway."""
         url = f"{IBKRSPXMarketData.BASE_URL}/{endpoint.lstrip('/')}"
+
+        logging.debug(f"Sending request to {url}")
 
         # Standard spoof header so local gateways accept the incoming connection smoothly
         #headers = {"User-Agent": "Python-urllib"}
@@ -129,6 +137,12 @@ class IBKRSPXMarketData:
             con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}?symbol=VIX"
             self.vix_contract_data = self._get_request(con_endpoint_url)
 
+    def _initialize_vix3m(self):
+        if not self.vix3m_contract_data:
+            # Query the VIX contract ID to initialize the IBKR client.
+            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}?symbol=VIX3M"
+            self.vix3m_contract_data = self._get_request(con_endpoint_url)
+
 
     def spx_historical_data(self, end_date: date) -> dict:
         """
@@ -146,6 +160,14 @@ class IBKRSPXMarketData:
         """
         self._initialize_vix()
         return self._get_historical_data(IBKRSPXMarketData.VIX_CON_ID, end_date)
+
+    def vix3m_historial_data(self, end_date: date) -> dict:
+        """
+        Retrieves VIX3M daily historical market data for 1 year
+        end_date: Date from where the data will go back in time.
+        """
+        self._initialize_vix3m()
+        return self._get_historical_data(IBKRSPXMarketData.VIX3M_CON_ID, end_date)
 
 
     def _get_spx_spot(self) -> float:
@@ -247,43 +269,63 @@ class IBKRSPXMarketData:
         return spx_close, expiration, list(zip(sorted_strikes, sorted_ivs))
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", "--historical-spx-vix-vix3m",
+                        help="Retrieve last year daily SPX, VIX and VIX3M data",
+                        dest="historicals",
+                        action="store_true")
+    parser.add_argument("-v", "--spx-iv-surface",
+                        help="Retrieve the closest monthly IV surface, "
+                              "argument can be either put or call",
+                        dest="iv_surface")
+    parser.add_argument("-o", "--output-file",
+                        help="Output file to stream data in JSON format",
+                        dest="output_file",
+                        required=True)
+    return parser.parse_args()
+
+
 def main():
     """
     Quick data retrieval tool for SPX, VIX time series
     or SPX volatility smile.
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-spx", help="Retrieve last year daily SPX data",
-                        action="store_true")
-    parser.add_argument("-vix", help="Retrieve last year daily VIX data",
-                        action="store_true")
-    parser.add_argument("-spx-iv-surface",
-                         help="""Retrieve the closest monthly IV surface,
-                         argument can be either put or call""")
-
-    args = parser.parse_args()
+    logging.basicConfig(
+    format="%(asctime)s:%(filename)s:"
+            "%(lineno)d:%(levelname)s: %(message)s",
+    level=logging.DEBUG)
+    args = parse_args()
     ibkr = IBKRSPXMarketData()
 
-    if args.spx:
+    if args.historicals and args.iv_surface:
+        raise ValueError("Please specify only one option to retrieve data.")
+
+    if args.historicals:
         spx_candles = ibkr.spx_historical_data(date.today())
-        print(json.dumps(spx_candles))
-
-    if args.vix:
         vix_candles = ibkr.vix_historial_data(date.today())
-        print(json.dumps(vix_candles))
+        vix3m_candles = ibkr.vix3m_historial_data(date.today())
+        output = {
+            "spx": spx_candles,
+            "vix": vix_candles,
+            "vix3m": vix3m_candles
+        }
+        with open(args.output_file, "w") as f:
+            json.dump(output, f)
+            return 0
 
-    if args.spx_iv_surface:
+    if args.iv_surface:
         option_type = args.spx_iv_surface.lower()
         if option_type not in ["call", "put"]:
             print(f"Invalid option type: '{option_type}'", file=sys.stderr)
             sys.exit(1)
 
         spot, expiration, surface = ibkr.spx_current_option_iv_surface(option_type=option_type)
-        print(json.dumps({
-            "spot": spot,
-            "expiration": expiration,
-            "iv_surface": surface
-        }))
+        with open(args.output_file, "w") as f:
+            json.dump({ "spot": spot,
+                        "expiration": expiration,
+                        "iv_surface": surface }, f)
+            return 0
 
 
 if __name__ == "__main__":
