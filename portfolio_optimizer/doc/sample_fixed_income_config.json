@@ -1,0 +1,13 @@
+{
+    "type": "CombinedPortfolioStrategy",
+    "components": [
+        {
+            "portfolio": {
+                "type": "FixedIncomeStrategy" ,
+                "rate": 0.03,
+                "compounding": "monthly"
+            },
+            "weight": 1.0
+        }
+    ]
+}
