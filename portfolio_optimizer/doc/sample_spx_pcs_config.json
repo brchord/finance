@@ -1,0 +1,20 @@
+{
+    "type": "CombinedPortfolioStrategy",
+    "components": [
+        {
+            "portfolio": {
+                "type": "SPXPutCreditSpreadStrategy" ,
+                "delta_spread": 0.10,
+                "delta_threshold": -0.4,
+                "distribution": 12500,
+                "dtes": 45,
+                "dtes_to_close": 10,
+                "leverage": 1.0,
+                "profit_target": 0.75,
+                "rf_rate": 0.03,
+                "short_delta": -0.15
+            },
+            "weight": 1.0
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+{
+    "type": "CombinedPortfolioStrategy",
+    "components": [
+        {
+            "portfolio": {
+                "type": "SPXPutOptionStrategy" ,
+                "delta": -0.15,
+                "distribution": 12500,
+                "dtes": 45,
+                "inflation": 0.025,
+                "leverage": 0.5,
+                "max_dtes": 135,
+                "rf_rate": 0.03,
+                "take_profit": 0.75
+            },
+            "weight": 1.0
+        }
+    ]
+}
