@@ -12,8 +12,11 @@ investment strategies:
 
 import math
 from abc import ABC, abstractmethod
+from typing import override
 
 import numpy as np
+
+from market_modelling.dsvi import DynamicSVI
 
 class InvestmentStrategy(ABC):
     """
@@ -39,15 +42,24 @@ class InvestmentStrategy(ABC):
         if self.verbose:
             print(s)
 
+    @classmethod
+    def from_json_object(cls, o):
+        """Builds a portfolio instance out of a JSON parsed object."""
+        raise NotImplementedError("Do not invoke this directly")
+
 
     @abstractmethod
-    def run_simulation(self, initial_nav: float, days: int) -> np.array:
+    def run_simulation(
+        self, *,
+        spot_spx: list[float],  # Time series for SPX underlying price.
+        spot_vix: list[float],  # Time series for the spot VIX.
+        vix3m: list[float],     # Time series for the VIX3M.
+        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,     # NAV to start the simulation with.
+        days: int) -> np.array: # Days to run the simulation
         """
         Starts the investment portfolio simulation.
-        initial_nav: Portfolio's Net Asset Value.
-        days: How many days to run the simulation.
-        returns: either the final portfolio's NAV or a time series
-                 representing the daily changes in NAV.
+        returns: a time series representing the daily changes in NAV.
         """
         return np.full(initial_nav, days)
 
@@ -74,7 +86,14 @@ class FixedIncomeStrategy(InvestmentStrategy):
         self.compounding = comp
 
 
-    def run_simulation(self, initial_nav: float, days: int) -> np.array:
+    def run_simulation(
+        self, *,
+        spot_spx: list[float],  # Time series for SPX underlying price.
+        spot_vix: list[float],  # Time series for the spot VIX.
+        vix3m: list[float],     # Time series for the VIX3M.
+        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,     # NAV to start the simulation with.
+        days: int) -> np.array: # Days to run the simulation
         """Run portfolio simulation (see parent's class docstring)."""
         daily_rate = self.rate / 252.0
         monthly_rate = self.rate / 12.0
@@ -91,6 +110,24 @@ class FixedIncomeStrategy(InvestmentStrategy):
             path[d] = current_nav
         return path
 
+    @classmethod
+    @override
+    def from_json_object(cls, o):
+        """
+        Builds a lambda that given an underlying, monthly volatility and
+        3 month forward volatility simulated paths returns an instance of
+        this portfolio strategy from a JSON parsed object. The structure
+        must have the following shape:
+        {
+            "type": "FixedIncomeStrategy",
+            "rate": interest_rate,
+            "compounding": "continuous" | "daily" | "monthly"
+        }
+        """
+        if o["type"] != "FixedIncomeStrategy":
+            return None
+        return FixedIncomeStrategy(float(o["rate"]), o["compounding"])
+
 
 class LongSPYStrategy(InvestmentStrategy):
     """
@@ -98,19 +135,23 @@ class LongSPYStrategy(InvestmentStrategy):
     for quarterly dividend distributions.
     """
     def __init__(self,
-                 spot_spx: list[float], # Time series for SPX spot price.
-                 avg_yield=0.0105):     # SP500's average dividend yield.
+                 avg_yield=0.0105): # SP500's average dividend yield.
         super().__init__()
         self.log(f"""Initializing long SPY portfolio strategy:
-            Initial SPX Spot: {spot_spx[0]:,.2f}
       Average Dividend Yield: {avg_yield*100.0:.2f}%""")
-        self.spy_spot = [x / 10.0 for x in spot_spx]
         self.avg_yield = avg_yield
 
 
-    def run_simulation(self, initial_nav: float, days: int) -> np.array:
+    def run_simulation(
+        self, *,
+        spot_spx: list[float],  # Time series for SPX underlying price.
+        spot_vix: list[float],  # Time series for the spot VIX.
+        vix3m: list[float],     # Time series for the VIX3M.
+        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,     # NAV to start the simulation with.
+        days: int) -> np.array: # Days to run the simulation
         """Run portfolio simulation (see parent's class docstring)."""
-        shares = initial_nav / self.spy_spot[0]
+        shares = initial_nav / (spot_spx[0] / 10.0)
         quarterly_yield = self.avg_yield / 4.0
 
         cash = 0.0
@@ -118,9 +159,27 @@ class LongSPYStrategy(InvestmentStrategy):
         for d in range(0, days):
             if d % 63 == 0:
                 cash += shares * quarterly_yield
-            nav = shares * self.spy_spot[d] + cash
+            nav = shares * (spot_spx[d] / 10.0) + cash
             path[d] = nav
         return path
+
+
+    @classmethod
+    @override
+    def from_json_object(cls, o):
+        """
+        Builds a lambda that given an underlying, monthly volatility and
+        3 month forward volatility simulated paths returns an instance of
+        this portfolio strategy from a JSON parsed object. The structure
+        must have the following shape:
+        {
+            "type": "LongSPYStrategy",
+            "avg_yield": dividend_yield
+        }
+        """
+        if o["type"] != "LongSPYStrategy":
+            return None
+        return LongSPYStrategy(float(o["avg_yield"]))
 
 
 class CombinedPortfolioStrategy(InvestmentStrategy):
@@ -148,7 +207,14 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         self.components = components
 
 
-    def run_simulation(self, initial_nav, days) -> np.array:
+    def run_simulation(
+        self, *,
+        spot_spx: list[float],  # Time series for SPX underlying price.
+        spot_vix: list[float],  # Time series for the spot VIX.
+        vix3m: list[float],     # Time series for the VIX3M.
+        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,     # NAV to start the simulation with.
+        days: int) -> np.array: # Days to run the simulation
         """Run portfolio simulation (see parent's class docstring)."""
         total_weight = 0.0
         result = np.zeros(days)
@@ -156,7 +222,9 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         for portfolio, weight in self.components:
             total_weight += weight
             partial = portfolio.run_simulation(
-                initial_nav * weight, days)
+                spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
+                svi=svi, initial_nav=initial_nav * weight,
+                days=days)
             result += partial
         if (1.0 - total_weight) >= 1e3:
             rem_cash = initial_nav * (1.0 - total_weight)
