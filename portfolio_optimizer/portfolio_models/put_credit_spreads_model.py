@@ -212,6 +212,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
             Initial NAV: ${initial_nav:,.2f}
             Days to run:  {days}""")
 
+        self.svi = svi
         assert days <= len(spot_spx)
 
         # Technical Indicators

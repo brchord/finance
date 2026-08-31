@@ -236,7 +236,6 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         initial_nav: float,     # NAV to start the simulation with.
         days: int) -> np.array: # Days to run the simulation
         """Run portfolio simulation (see parent's class docstring)."""
-        self.svi = svi
         return super().run_simulation(
            spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
            svi=svi, initial_nav=initial_nav, days=days)
@@ -375,6 +374,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             Initial NAV: ${initial_nav:,.2f}
             Days to run:  {days}""")
 
+        self.svi = svi
         assert days <= len(spot_spx)
 
         # Technical Indicators
@@ -612,8 +612,8 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             strike = lbe["strike"]
             exp = lbe["expiration"] + lbe["day"] + 1 - days
             yr_exp = exp/365.0
-            vix = self.vix[-1]
-            spx = self.spot[-1]
+            vix = spot_vix[-1]
+            spx = spot_spx[-1]
             r = self.risk_free_rate
             book_put_iv = svi.get_iv_curve(vix, strike, spx, yr_exp)
             book_put_price = bs.option_price(today_spot, strike, yr_exp, r, book_put_iv, False)

@@ -14,8 +14,8 @@ import numpy as np
 
 from market_modelling.dsvi import DynamicSVI
 from market_modelling.svcj import SVCJSimulation
-from portfolio_models.option_models import ShortSPXPutStrategy
-from portfolio_models.option_models import SPXPutCreditSpreadStrategy
+from portfolio_models.short_put_model import ShortSPXPutStrategy
+from portfolio_models.put_credit_spreads_model import SPXPutCreditSpreadStrategy
 
 # ============================================
 # 5. Fitting current volatility curves with
@@ -69,21 +69,22 @@ def main():
     spx, vix = svcj.generate_path(spot_spx, spot_vix)
     vix3m = svcj.derive_vix3m(vix)
 
-    spx_put_trade_strategy = ShortSPXPutStrategy(
+    spx_put_trade_strategy = ShortSPXPutStrategy(distribution=12_500)
+    spx_pcs_trade_strategy = SPXPutCreditSpreadStrategy(distribution=12_500)
+    spx_put_trade_strategy.run_simulation(
         spot_spx=spx,
         spot_vix=vix,
         vix3m=vix3m,
         svi=svi,
-        distribution=12_500)
-    spx_pcs_trade_strategy = SPXPutCreditSpreadStrategy(
+        initial_nav=4_000_000,
+        days=252)
+    spx_pcs_trade_strategy.run_simulation(
         spot_spx=spx,
         spot_vix=vix,
         vix3m=vix3m,
         svi=svi,
-        distribution=12_500
-    )
-    spx_put_trade_strategy.run_simulation(4_000_000, 252)
-    spx_pcs_trade_strategy.run_simulation(4_000_000, 252)
+        initial_nav=4_000_000,
+        days=252)
 
     # Calculate elapsed time
     end_time = time.perf_counter()
