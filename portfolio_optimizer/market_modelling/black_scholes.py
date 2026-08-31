@@ -12,12 +12,14 @@ def log(s: str):
     if BLACK_SCHOLES_VERBOSE:
         print(s)
 
+
 def norm_cdf(x: float):
     """
     Represents the cumulative distribution
     function for the normal distribution.
     """
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
 
 def option_price(spot: float, strike: float, expiration: float,
                  rf_rate: float, sigma: float, is_call=False):
