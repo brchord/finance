@@ -37,25 +37,17 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     }
 
 
-    def __init__(
-            self, *,
-            rf_rate=0.03,     # Annualized risk free rate.
-            full_book=False): # Track full options book for debugging.
+    def __init__(self, *,
+                 rf_rate=0.03): # Annualized risk free rate.
         super().__init__()
         self.log(f"""Initializing SPX put portfolio strategy:"
-            Risk Free Rate:  {rf_rate*100.0:.2f}%
-        Track Options Book:  {full_book}""")
+            Risk Free Rate:  {rf_rate*100.0:.2f}%""")
+        self.svi = None
         self.risk_free_rate = rf_rate
         self.live_options_book = {
             'sto': [],
             'bto': []
         }
-
-        self.options_trade_book = None
-        self.svi = None
-
-        if full_book:
-            self.options_trade_book = []
 
 
     def _find_put_strike_by_delta(self, spot: float, atm_iv: float,
@@ -229,16 +221,17 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     @abstractmethod
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         return super().run_simulation(
            spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
-           svi=svi, initial_nav=initial_nav, days=days)
+           svi=svi, initial_nav=initial_nav, days=days, full_book=full_book)
 
 
 class ShortSPXPutStrategy(SPXPutOptionStrategy):
@@ -271,11 +264,8 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                  delta=-0.15,           # Put Delta to use when shorting.
                  dtes=45,               # Short option expirations.
                  max_dtes=135,          # Option book maximium expiration permitted.
-                 take_profit=0.75,      # Take profits at percentage of each premium sold.
-                 full_book=False):       # Track full options book for debugging.
-        super().__init__(
-            rf_rate=rf_rate,
-            full_book=full_book)
+                 take_profit=0.75):     # Take profits at percentage of each premium sold.
+        super().__init__(rf_rate=rf_rate)
 
         self.log(f"""Initializing short put portfolio strategy:"
        Monthly Withdrawals: ${distribution:,.2f}
@@ -363,12 +353,13 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         self.log(f"""Starting simulation, initial parameters:
             Initial NAV: ${initial_nav:,.2f}

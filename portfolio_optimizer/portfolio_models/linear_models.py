@@ -18,6 +18,9 @@ import numpy as np
 
 from market_modelling.dsvi import DynamicSVI
 
+from portfolio_models.short_put_model import ShortSPXPutStrategy
+from portfolio_models.put_credit_spreads_model import SPXPutCreditSpreadStrategy
+
 class InvestmentStrategy(ABC):
     """
     Abstract class representing a generic investment strategy.
@@ -27,6 +30,7 @@ class InvestmentStrategy(ABC):
     def __init__(self):
         super().__init__()
         self.verbose = False
+        self.transaction_book = []
 
 
     def enable_verbosity(self):
@@ -51,17 +55,26 @@ class InvestmentStrategy(ABC):
     @abstractmethod
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """
         Starts the investment portfolio simulation.
         returns: a time series representing the daily changes in NAV.
         """
         return np.full(initial_nav, days)
+
+
+    def transaction_book(self):
+        """Returns the full trading book for the last simulated path that
+        enabled full book tracking.
+        """
+        return self.transaction_book
+
 
 
 class FixedIncomeStrategy(InvestmentStrategy):
@@ -88,12 +101,13 @@ class FixedIncomeStrategy(InvestmentStrategy):
 
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         daily_rate = self.rate / 252.0
         monthly_rate = self.rate / 12.0
@@ -144,12 +158,13 @@ class LongSPYStrategy(InvestmentStrategy):
 
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         shares = initial_nav / (spot_spx[0] / 10.0)
         quarterly_yield = self.avg_yield / 4.0
@@ -209,12 +224,13 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
 
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         total_weight = 0.0
         result = np.zeros(days)
@@ -224,10 +240,30 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
             partial = portfolio.run_simulation(
                 spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
                 svi=svi, initial_nav=initial_nav * weight,
-                days=days)
+                days=days, full_book=full_book)
             result += partial
         if (1.0 - total_weight) >= 1e3:
             rem_cash = initial_nav * (1.0 - total_weight)
             result += rem_cash
 
         return result
+
+
+    @classmethod
+    @override
+    def from_json_object(cls, o):
+        if o["type"] != "CombinedPortfolioStrategy":
+            return None
+        models = [FixedIncomeStrategy, LongSPYStrategy,
+                  ShortSPXPutStrategy, SPXPutCreditSpreadStrategy]
+        components = o["components"]
+        portfolios = []
+        for c in components:
+            p = c["portfolio"]
+            w = float(c["weight"])
+            for m in models:
+                po = m.from_json_object(p)
+                if po is not None:
+                    portfolios.append((po, w))
+                    continue
+        return CombinedPortfolioStrategy(portfolios) 

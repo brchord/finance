@@ -44,17 +44,16 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
        gamma risk.
     """
     def __init__(self, *,
-                 distribution,         # Monthly retirement distribution.
-                 leverage=1.0,         # Percentage of NAV notional leverage.
-                 rf_rate=0.03,         # Risk free rate.
-                 dtes=45,              # Spread initial expiration.
-                 short_delta=-0.15,    # Short put delta.
-                 delta_spread=0.1,     # Delta spread between short and long.
-                 profit_target=0.75,   # Target profit close percentage.
-                 dtes_to_close=10,     # Minimum DTEs to have a live spread.
-                 delta_threshold=-0.4, # Short delta threshold to stop loss.
-                 full_book=True):      # Track every option trade.
-        super().__init__(rf_rate=rf_rate, full_book=full_book)
+                 distribution,          # Monthly retirement distribution.
+                 leverage=1.0,          # Percentage of NAV notional leverage.
+                 rf_rate=0.03,          # Risk free rate.
+                 dtes=45,               # Spread initial expiration.
+                 short_delta=-0.15,     # Short put delta.
+                 delta_spread=0.1,      # Delta spread between short and long.
+                 profit_target=0.75,    # Target profit close percentage.
+                 dtes_to_close=10,      # Minimum DTEs to have a live spread.
+                 delta_threshold=-0.4): # Short delta threshold to stop loss.
+        super().__init__(rf_rate=rf_rate)
         self.log(f"""Initializing Put Credit Spreads portfolio strategy:"
        Monthly Withdrawals: ${distribution:,.2f}
          Notional Leverage:  {leverage:.2f}x of NAV
@@ -201,12 +200,13 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
 
     def run_simulation(
         self, *,
-        spot_spx: list[float],  # Time series for SPX underlying price.
-        spot_vix: list[float],  # Time series for the spot VIX.
-        vix3m: list[float],     # Time series for the VIX3M.
-        svi: DynamicSVI,        # Stochastic Volatility Inspired IV Model.
-        initial_nav: float,     # NAV to start the simulation with.
-        days: int) -> np.array: # Days to run the simulation
+        spot_spx: list[float],        # Time series for SPX underlying price.
+        spot_vix: list[float],        # Time series for the spot VIX.
+        vix3m: list[float],           # Time series for the VIX3M.
+        svi: DynamicSVI,              # Stochastic Volatility Inspired IV Model.
+        initial_nav: float,           # NAV to start the simulation with.
+        days: int,                    # Days to run the simulation
+        full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
         self.log(f"""Starting simulation, initial parameters:
             Initial NAV: ${initial_nav:,.2f}
