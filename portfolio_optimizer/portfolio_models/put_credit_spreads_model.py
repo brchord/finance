@@ -11,7 +11,6 @@ See the class documentation for the specific
 dynamics of the trading strategy.
 """
 
-import math
 from typing import override
 
 import numpy as np
@@ -87,15 +86,15 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
         """
         if o["type"] != "SPXPutCreditSpreadStrategy":
             return None
-        distribution = float(o["distribution"])
-        leverage = float(o["leverage"])
-        rf_rate = float(o["rf_rate"])
-        dtes = float(o["dtes"])
-        short_delta = float(o["short_delta"])
         delta_spread = float(o["delta_spread"])
-        profit_target = float(o["profit_target"])
-        dtes_to_close = float(o["dtes_to_close"])
         delta_threshold = float(o["delta_threshold"])
+        distribution = float(o["distribution"])
+        dtes = float(o["dtes"])
+        dtes_to_close = float(o["dtes_to_close"])
+        leverage = float(o["leverage"])
+        profit_target = float(o["profit_target"])
+        rf_rate = float(o["rf_rate"])
+        short_delta = float(o["short_delta"])
 
         return SPXPutCreditSpreadStrategy(
             distribution=distribution,
@@ -212,6 +211,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
             Initial NAV: ${initial_nav:,.2f}
             Days to run:  {days}""")
 
+        self.track_book = full_book
         self.svi = svi
         assert days <= len(spot_spx)
 
@@ -224,7 +224,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
         nav = initial_nav
 
         cash = self._sell_put_credit_spread(
-            0, spot_spx[0], math.sqrt(spot_vix[0]), nav, current_leverage,
+            0, spot_spx[0], spot_vix[0], nav, current_leverage,
             self.short_delta, self.delta_spread, self.spread_dtes,
             self.profit_target)
 
@@ -236,8 +236,8 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
 
         for d in range(1, days):
             today_spot = spot_spx[d]
-            today_vix = math.sqrt(spot_vix[d])
-            today_vix3m = math.sqrt(vix3m[d])
+            today_vix = spot_vix[d]
+            today_vix3m = vix3m[d]
             r = self.risk_free_rate
 
             if d % 21 == 0:
@@ -314,6 +314,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                         After-trade NAV: ${nav:,.2f}
                         Previous Cash: ${prev_cash:,.2f}""")
 
+                    return_path[d] = nav
                     continue
 
                 lbe_short = self.live_options_book['sto'][0]
@@ -437,7 +438,7 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                 After-trade NAV: ${nav:,.2f}
                 Previous Cash: ${prev_cash:,.2f}""")
 
-            return_path[-1] = nav
+            return_path[d] = nav
 
         # In order to make this portfolio stitchable, we need to close
         # all live option positions at the end of the simulation.

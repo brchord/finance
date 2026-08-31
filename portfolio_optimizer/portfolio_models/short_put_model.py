@@ -230,7 +230,6 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         days: int,                    # Days to run the simulation
         full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
-        self.track_book = full_book
         return super().run_simulation(
            spot_spx=spot_spx, spot_vix=spot_vix, vix3m=vix3m,
            svi=svi, initial_nav=initial_nav, days=days, full_book=full_book)
@@ -306,13 +305,13 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
         """
         if o["type"] != "SPXPutOptionStrategy":
             return None
-        rf_rate = float(o["rf_rate"])
-        distribution = float(o["distribution"])
-        leverage = float(o["leverage"])
-        inflation = float(o["inflation"])
         delta = float(o["delta"])
+        distribution = float(o["distribution"])
         dtes = float(o["dtes"])
+        inflation = float(o["inflation"])
+        leverage = float(o["leverage"])
         max_dtes = float(o["max_dtes"])
+        rf_rate = float(o["rf_rate"])
         take_profit = float(o["take_profit"])
         return ShortSPXPutStrategy(
             rf_rate=rf_rate,
@@ -367,6 +366,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             Initial NAV: ${initial_nav:,.2f}
             Days to run:  {days}""")
 
+        self.track_book = full_book
         self.svi = svi
         assert days <= len(spot_spx)
 
@@ -379,7 +379,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
         nav = initial_nav
 
         cash = self._sell_to_open_put(
-            0, spot_spx[0], math.sqrt(spot_vix[0]),
+            0, spot_spx[0], spot_vix[0],
             nav, current_leverage, self.delta,
             self.dtes, self.take_profit)
 
@@ -391,8 +391,8 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
         for d in range(1, days):
             today_spot = spot_spx[d]
-            today_vix = math.sqrt(spot_vix[d])
-            today_vix3m = math.sqrt(vix3m[d])
+            today_vix = spot_vix[d]
+            today_vix3m = vix3m[d]
             r = self.risk_free_rate
 
             if d % 21 == 0:
@@ -467,6 +467,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                         After-trade NAV: ${nav:,.2f}
                         Previous Cash: ${prev_cash:,.2f}""")
 
+                    return_path[d] = nav
                     continue
 
                 # Get the latest entry in the option ledger.
@@ -588,7 +589,6 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                             current_leverage, self.delta,
                             self.dtes, self.take_profit)
 
-
             # Reinvest (or subtract) new cash flows.
             if abs(cash) > 0.01:
                 prev_nav = nav
@@ -600,7 +600,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 After-trade NAV: ${nav:,.2f}
                 Previous Cash: ${prev_cash:,.2f}""")
 
-            return_path[-1] = nav
+            return_path[d] = nav
 
         # In order to make this portfolio stitchable, we need to close
         # all live option positions at the end of the simulation.
