@@ -70,7 +70,7 @@ class IBKRSPXMarketData:
         """Performs an out-of-the-box REST GET request against the local IBKR gateway."""
         url = f"{IBKRSPXMarketData.BASE_URL}/{endpoint.lstrip('/')}"
 
-        logging.debug(f"Sending request to {url}")
+        logging.debug("Sending request to %s", url)
 
         # Standard spoof header so local gateways accept the incoming connection smoothly
         #headers = {"User-Agent": "Python-urllib"}
@@ -170,6 +170,13 @@ class IBKRSPXMarketData:
         return self._get_historical_data(IBKRSPXMarketData.VIX3M_CON_ID, end_date)
 
 
+    def _get_vix_spot(self) -> float:
+        hist_data = self._get_historical_data(
+            IBKRSPXMarketData.VIX_CON_ID, date.today(), "1w", "1w")
+        last_candle = hist_data["data"][-1]
+        return last_candle["c"]
+
+
     def _get_spx_spot(self) -> float:
         hist_data = self._get_historical_data(
             IBKRSPXMarketData.SPX_CON_ID, date.today(), "1w", "1w")
@@ -247,8 +254,10 @@ class IBKRSPXMarketData:
         # Step 1. Initialize the client by retrieving the SPX
         #         contract data
         self._initialize_spx()
+        self._initialize_vix()
         # Step 2. Retrieve SPX spot to filter down strikes.
         spx_close = self._get_spx_spot()
+        vix_close = self._get_vix_spot()
         # Step 2. Query the set of strikes for the monthly option contracts
         #         of next month.
         expiration, opt_contracts = self._get_strike_contracts(spx_close, opt_type)
@@ -257,7 +266,16 @@ class IBKRSPXMarketData:
         conid_map = {value: key for (key, value) in opt_contracts.items()}
         # Step 4. Retrieve each option implied volatility and then build a list
         #         of pairs mapping strike -> IV% in strike ascending order.
-        market_data = self._get_live_market_data(conids, ["7633"])
+        retries = 3
+        while retries > 0:
+            try:
+                market_data = self._get_live_market_data(conids, ["7633"])
+                break
+            except Exception as e:
+                logging.warning("Error trying to load IV: %s", str(e))
+            finally:
+                retries -= 1
+
         iv_surface = {}
         for market_row in market_data:
             conid = market_row["conid"]
@@ -266,10 +284,11 @@ class IBKRSPXMarketData:
         sorted_strikes = list(iv_surface.keys())
         sorted_strikes.sort()
         sorted_ivs = [iv_surface[s] for s in sorted_strikes]
-        return spx_close, expiration, list(zip(sorted_strikes, sorted_ivs))
+        return spx_close, vix_close, expiration, list(zip(sorted_strikes, sorted_ivs))
 
 
 def parse_args():
+    "Parse command line arguments"
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--historical-spx-vix-vix3m",
                         help="Retrieve last year daily SPX, VIX and VIX3M data",
@@ -302,31 +321,35 @@ def main():
         raise ValueError("Please specify only one option to retrieve data.")
 
     if args.historicals:
-        spx_candles = ibkr.spx_historical_data(date.today())
-        vix_candles = ibkr.vix_historial_data(date.today())
-        vix3m_candles = ibkr.vix3m_historial_data(date.today())
+        today = date.today()
+        spx_candles = ibkr.spx_historical_data(today)
+        vix_candles = ibkr.vix_historial_data(today)
+        vix3m_candles = ibkr.vix3m_historial_data(today)
         output = {
             "spx": spx_candles,
             "vix": vix_candles,
             "vix3m": vix3m_candles
         }
-        with open(args.output_file, "w") as f:
+        with open(args.output_file, "w", encoding="utf-8") as f:
             json.dump(output, f)
             return 0
 
     if args.iv_surface:
-        option_type = args.spx_iv_surface.lower()
+        option_type = args.iv_surface.lower()
         if option_type not in ["call", "put"]:
             print(f"Invalid option type: '{option_type}'", file=sys.stderr)
             sys.exit(1)
 
-        spot, expiration, surface = ibkr.spx_current_option_iv_surface(option_type=option_type)
-        with open(args.output_file, "w") as f:
-            json.dump({ "spot": spot,
+        spx, vix, expiration, surface = \
+            ibkr.spx_current_option_iv_surface(option_type=option_type)
+        with open(args.output_file, "w", encoding="utf-8") as f:
+            json.dump({ "spot_spx": spx,
+                        "spot_vix": vix,
                         "expiration": expiration,
                         "iv_surface": surface }, f)
             return 0
 
+    return 0
 
 if __name__ == "__main__":
     main()
