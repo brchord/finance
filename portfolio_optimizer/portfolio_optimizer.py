@@ -18,9 +18,6 @@ from portfolio_models.short_put_model import ShortSPXPutStrategy
 from portfolio_models.put_credit_spreads_model import SPXPutCreditSpreadStrategy
 
 # ============================================
-# 5. Fitting current volatility curves with
-#    real market data and start the
-#    simulation.
 # NOTE: Real options chain data from
 #       Aug 15th 2026.
 # ============================================
@@ -89,7 +86,6 @@ def main():
     # Calculate elapsed time
     end_time = time.perf_counter()
     execution_time = end_time - start_time
-
     print(f"Path execution time: {execution_time:.3f}s")
 
 

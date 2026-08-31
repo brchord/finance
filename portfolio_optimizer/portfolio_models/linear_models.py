@@ -27,7 +27,7 @@ class InvestmentStrategy(ABC):
     def __init__(self):
         super().__init__()
         self.verbose = False
-        self.transaction_book = []
+        self.book = []
 
 
     def enable_verbosity(self):
@@ -70,7 +70,7 @@ class InvestmentStrategy(ABC):
         """Returns the full trading book for the last simulated path that
         enabled full book tracking.
         """
-        return self.transaction_book
+        return self.book
 
 
 
@@ -206,7 +206,9 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
     def __init__(self, components: list[tuple[InvestmentStrategy, float]]):
         super().__init__()
         total_weight = sum(weigh for (_, weigh) in components)
-        if len(filter(weigh for (_, weigh) in components if weigh < 0.0)) > 0:
+        non_positive_weights = list(filter(lambda x: x <= 0.0,
+                                       [weight for (_, weight) in components]))
+        if len(non_positive_weights) > 0:
             raise ValueError("Negative weight for portfolio components")
 
         if total_weight > 1.0:
@@ -267,4 +269,4 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
                 if po is not None:
                     portfolios.append((po, w))
                     continue
-        return CombinedPortfolioStrategy(portfolios) 
+        return CombinedPortfolioStrategy(portfolios)

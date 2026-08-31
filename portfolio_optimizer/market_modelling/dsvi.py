@@ -13,7 +13,7 @@ class DynamicSVI:
     model fitted using real volatility smirks observed in actual
     equities markets.
     """
-    def __init__(self, strikes_market: list[float], iv_market: list[float],
+    def __init__(self, strikes_market: np.array, iv_market: np.array,
                  spot_price: float, yearly_exp: float):
         """
         Initializes Dynamic Surface Volatility Interpolation

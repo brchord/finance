@@ -193,7 +193,7 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
             self.live_options_book['bto'].clear()
 
         if self.track_book:
-            self.transaction_book.append(book_entry)
+            self.book.append(book_entry)
 
         return debit_credit
 
