@@ -11,6 +11,8 @@ See the class documentation for the specific
 dynamics of the trading strategy.
 """
 
+import logging 
+
 from typing import override
 
 import numpy as np
@@ -19,6 +21,8 @@ import pandas as pd
 from market_modelling import black_scholes as bs
 from market_modelling.dsvi import DynamicSVI
 from portfolio_models.short_put_model import SPXPutOptionStrategy
+
+logger = logging.getLogger(__name__)
 
 class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
     """
@@ -53,15 +57,23 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                  dtes_to_close=10,      # Minimum DTEs to have a live spread.
                  delta_threshold=-0.4): # Short delta threshold to stop loss.
         super().__init__(rf_rate=rf_rate)
-        self.log(f"""Initializing Put Credit Spreads portfolio strategy:"
-       Monthly Withdrawals: ${distribution:,.2f}
-         Notional Leverage:  {leverage:.2f}x of NAV
-  Option Spread Expiration:  {dtes:.0f} DTEs
-        Short Option Delta:  {short_delta:.2f}
-              Delta Spread:  {delta_spread:.2f}
-           Take profits at:  {profit_target*100:.2f}% of premium sold
-       Maximium Expiration:  {dtes_to_close:.0f} DTEs
-     Delta Close Threshold:  {delta_threshold:.2f}""")
+        logging.debug("""Initializing Put Credit Spreads portfolio strategy:
+       Monthly Withdrawals: $%.2f
+         Notional Leverage:  %.2fx of NAV
+  Option Spread Expiration:  %0f DTEs
+        Short Option Delta:  %.2f
+              Delta Spread:  %.2f
+           Take profits at:  %.2f% of premium sold
+       Maximium Expiration:  %0f DTEs
+     Delta Close Threshold:  %.2f""",
+            distribution,
+            leverage,
+            dtes,
+            short_delta,
+            delta_spread,
+            profit_target * 100.0,
+            dtes_to_close,
+            delta_threshold)
         self.monthly_dist = distribution
         self.leverage = leverage
         self.spread_dtes = dtes
@@ -115,13 +127,14 @@ class SPXPutCreditSpreadStrategy(SPXPutOptionStrategy):
                          delta,  # Put delta
                          dtes,   # Option expiration
                          size):  # Position size
-        self.log(f"""Opening a new long put position with the following requirements:
-         Simulation Day:  {day}
-                   Spot: ${spot:,.2f}
-                 ATM IV:  {atm_iv*100.0:.2f}%
-                  Delta:  {delta:.2f}
-             Expiration:  {dtes:.0f} DTEs
-          Position Size:  {size} contracts.""")
+        logging.debug("""Opening a new long put position with the following requirements:
+         Simulation Day:  %d
+                   Spot: $%.2f
+                 ATM IV:  %.2f%
+                  Delta:  %.2f
+             Expiration:  %d DTEs
+          Position Size:  %d contracts.""",
+            day, spot, atm_iv*100.0, delta, dtes, size)
         yr_exp = dtes / 365.0
         put_strike, put_price, _, put_iv = self._find_put_strike_by_delta(
             spot, atm_iv, delta, yr_exp)

@@ -10,13 +10,17 @@ investment strategies:
    of the ones above.
 """
 
+import logging
 import math
+
 from abc import ABC, abstractmethod
 from typing import override
 
 import numpy as np
 
 from market_modelling.dsvi import DynamicSVI
+
+logger = logging.getLogger(__name__)
 
 class InvestmentStrategy(ABC):
     """
@@ -26,22 +30,8 @@ class InvestmentStrategy(ABC):
     """
     def __init__(self):
         super().__init__()
-        self.verbose = False
         self.book = []
 
-
-    def enable_verbosity(self):
-        """
-        Whether or not print diagnostics on the
-        standard output.
-        """
-        self.verbose = True
-
-
-    def log(self, s: str):
-        "Simple logging"
-        if self.verbose:
-            print(s)
 
     @classmethod
     def from_json_object(cls, o):
@@ -156,8 +146,9 @@ class LongSPYStrategy(InvestmentStrategy):
     def __init__(self,
                  avg_yield=0.0105): # SP500's average dividend yield.
         super().__init__()
-        self.log(f"""Initializing long SPY portfolio strategy:
-      Average Dividend Yield: {avg_yield*100.0:.2f}%""")
+        logging.info("Initializing long SPY portfolio strategy: "
+                     "Average Dividend Yield: %.2f%""",
+                     avg_yield * 100.0)
         self.avg_yield = avg_yield
 
 
