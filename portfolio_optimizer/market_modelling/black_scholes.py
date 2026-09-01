@@ -1,17 +1,12 @@
 """
 Black-Scholes Options Pricing and Greeks.
 """
+import logging
 
 import math
 import numpy as np
 
-BLACK_SCHOLES_VERBOSE = False
-
-def log(s: str):
-    "Simple logging code"
-    if BLACK_SCHOLES_VERBOSE:
-        print(s)
-
+logger = logging.getLogger(__name__)
 
 def norm_cdf(x: float):
     """
@@ -27,13 +22,13 @@ def option_price(spot: float, strike: float, expiration: float,
     Compute an option price using the Black-Scholes-Myrton
     options pricing model.
     """
-    log(f"""Pricing option:
-                  Spot: ${spot:,.2f}
-                Strike: ${strike:,.2f}
-            Expiration:  {expiration * 365.0:.0f} DTEs
-        Risk Free Rate:  {rf_rate * 100:.2f}%
-    Implied Volatility:  {sigma * 100:.2f}%
-              Is Call?:  {is_call}""")
+    logging.debug("Pricing option:")
+    logging.debug("Spot: $%.2f", spot)
+    logging.debug("Strike: $%.2f", strike)
+    logging.debug("Expiration:  %.0f DTEs", expiration * 365.0)
+    logging.debug("Risk Free Rate:  %.2f%%", rf_rate * 100.0)
+    logging.debug("Implied Volatility:  %.2f%%", sigma * 100.0)
+    logging.debug("Is Call?:  %s", str(is_call))
 
     t = max(expiration, 1e-5)
     d1 = (np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))

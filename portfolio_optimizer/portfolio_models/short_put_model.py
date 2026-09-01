@@ -9,6 +9,7 @@ See the class documentation for the specific
 dynamics of the trading strategy.
 """
 
+import logging
 import math
 from abc import ABC, abstractmethod
 from typing import override
@@ -20,6 +21,8 @@ from market_modelling.dsvi import DynamicSVI
 from market_modelling import black_scholes as bs
 
 from portfolio_models.linear_models import InvestmentStrategy
+
+logger = logging.getLogger(__name__)
 
 class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     """
@@ -40,8 +43,10 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     def __init__(self, *,
                  rf_rate=0.03): # Annualized risk free rate.
         super().__init__()
-        self.log(f"""Initializing SPX put portfolio strategy:"
-            Risk Free Rate:  {rf_rate*100.0:.2f}%""")
+
+        logging.debug("Initializing SPX put portfolio strategy:")
+        logging.debug("Risk Free Rate: %2f", rf_rate*100.0)
+
         self.svi = None
         self.risk_free_rate = rf_rate
         self.live_options_book = {
@@ -60,14 +65,15 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     def _find_put_strike(self, spot: float, atm_iv: float,
                          target: float, expiration: float, use_delta: bool):
         # Binary search to find the exact put strike that yields the target delta
-        self.log(f"""Searching put option with parameters:
-        Underlying price:  {spot:,.2f}
-                  ATM IV:  {atm_iv * 100:.2f}""")
+        logging.debug("Searching put option with parameters:")
+        logging.debug("Underlying price:  %.2f", spot)
+        logging.debug("ATM IV:  %.2f%%", atm_iv)
+
         if use_delta:
-            self.log(f" Target Delta:  {target:.2f}")
+            logging.debug("Target Delta:  %.2f", target)
         else:
-            self.log(f" Target Price: ${target:,.2f}")
-        self.log(f" DTEs:  {expiration*365.0:.0f}")
+            logging.debug("Target Price: $%.2f", target)
+        logging.debug("DTEs: %.0f", expiration*365.0)
 
         low = spot * 0.5
         high = spot
@@ -78,11 +84,10 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
             delta = bs.option_delta(spot, mid, expiration, r, iv, is_call=False)
             price = bs.option_price(spot, mid, expiration, r, iv, is_call=False)
 
-            self.log(f"""
-              Trying strike: ${mid:.2f}
-            IV estimated at:  {iv*100:.2f}%
-                   Delta at:  {delta:.2f}
-                   Price at: ${price:,.2f}""")
+            logging.debug("Trying strike: $%.2f", mid)
+            logging.debug("IV estimated at:  %.2f%%", iv * 100.0)
+            logging.debug("Delta at:  %.2f", delta)
+            logging.debug("Price at: $%.2f", price)
 
             if use_delta:
                 abs_current = abs(delta)
@@ -103,23 +108,24 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
     def _sell_to_open_put(self, cur_day: int, spot: float, atm_iv: float,
                           nav: float, leverage: float, delta: float,
                           expiration: float, target_profit_pct: float):
-        self.log(f"""Trying to sell put with the following requirements:
-         Simulation Day:  {cur_day}
-                   Spot: ${spot:,.2f}
-                 ATM IV:  {atm_iv*100.0:.2f}%
-                    NAV: ${nav:,.2f}
-               Leverage:  {leverage:.2f}x
-                  Delta:  {delta:.2f}
-             Expiration:  {expiration:.0f} DTEs
-         Target Profit%:  {target_profit_pct:.2f}%""")
+        logging.debug("Trying to sell put with the following requirements:")
+        logging.debug("Simulation Day:  %d", cur_day)
+        logging.debug("Spot: $%.2f", spot)
+        logging.debug("ATM IV:  %.2f%%", atm_iv)
+        logging.debug("NAV: $%.2f", nav)
+        logging.debug("Leverage:  %.2fx", leverage)
+        logging.debug("Delta:  %.2f", delta)
+        logging.debug("Expiration:  %.0f", expiration)
+        logging.debug("Target Profit:  %.2f%%", target_profit_pct)
+
         yearly_exp = expiration / 365.0
         put_strike, put_price, _, put_iv = self._find_put_strike_by_delta(
             spot, atm_iv, delta, yearly_exp)
         position_size = math.floor(nav * leverage / put_strike / 100)
         # NAV is too low to create even a single contract, bail early.
         if position_size == 0:
-            self.log("Option notional too large to sell "
-                     "even a single contract, skipping.")
+            logging.debug("Option notional too large to sell "
+                          "even a single contract, skipping.")
             return 0.0
 
         target_profit = (1.0 - target_profit_pct) * put_price
@@ -149,20 +155,21 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
         if trade in ['bto', 'btc']:
             debit_credit *= -1.0
 
-        self.log(f"""Recording option trade in book:
-               Simulation Day:  {day}
-                        Trade:  {trade_str}
-                       Strike: ${strike:,.2f}
-                   Expiration:  {expiration:,.0f} DTEs
-                        Delta:  {delta:.2f}
-                           IV:  {iv*100.0:.2f}%
-                        Price: ${price:,.2f}
-                Position size:  {size}
-           Total debit/credit: ${debit_credit:,.2f}""")
+        logging.debug("Recording option trade in book:")
+        logging.debug("Simulation Day:  %d", day)
+        logging.debug("Trade:  %s", trade_str)
+        logging.debug("Strike: $%.2f", strike)
+        logging.debug("Expiration:  %.0f DTEs", expiration)
+        logging.debug("Delta:  %.2f", delta)
+        logging.debug("IV:  %.2f%%", iv)
+        logging.debug("Price: $%.2f", price)
+        logging.debug("Position size:  %d", size)
+        logging.debug("Total debit/credit: $%.2f", debit_credit)
+
         if target_profit:
-            self.log(f"                Target profit: ${target_profit:,.2f}")
+            logging.debug("Target profit: $%.2f", target_profit)
         if pnl:
-            self.log(f"                          PnL: ${pnl:,.2f}")
+            logging.debug("PnL: $%.2f", pnl)
 
         # Trade day, Put strike, Initial Expiration, Delta, IV, Price, Size, Total Premium
         book_entry =  {
@@ -204,16 +211,17 @@ class SPXPutOptionStrategy(InvestmentStrategy, ABC):
                           position_size: int, orig_price: float):
         pnl = (orig_price - put_price) * position_size * 100
 
-        self.log(f"""Buying to close live options in book:
-            Simulation day:  {cur_day}
-                Put strike: ${put_strike:,.2f}
-        Initial Expiration:  {dtes:.0f} DTEs
-         Current put delta:  {put_delta:.2f}
-            Current put IV:  {put_iv:.2f}
-         Current put price: ${put_price:,.2f}
-                     Units:  {position_size}
-            Original price: ${orig_price:,.2f}
-              Position PnL: ${pnl:,.2f}""")
+        logging.debug("Buying to close live options in book:")
+        logging.debug("Simulation day:  %d", cur_day)
+        logging.debug("Put strike: $%.2f", put_strike)
+        logging.debug("Initial Expiration:  %.0f DTEs", dtes)
+        logging.debug("Current put delta:  %.2f", put_delta)
+        logging.debug("Current put IV:  %.2f", put_iv)
+        logging.debug("Current put price: $%.2f", put_price)
+        logging.debug("Units:  %d", position_size)
+        logging.debug("Original price: $%.2f", orig_price)
+        logging.debug("Position PnL: $%.2f", pnl)
+
         return self._write_put_trade_to_book(
             day=cur_day, trade='btc', strike=put_strike,
             expiration=dtes, delta=put_delta, iv=put_iv, price=put_price,
@@ -269,14 +277,15 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                  take_profit=0.75):     # Take profits at percentage of each premium sold.
         super().__init__(rf_rate=rf_rate)
 
-        self.log(f"""Initializing short put portfolio strategy:"
-       Monthly Withdrawals: ${distribution:,.2f}
-         Notional Leverage:  {leverage:.2f}x of NAV
-            Inflation Rate:  {inflation*100.0:.2f}%
-              Option Delta:  {delta:.2f}
-         Option Expiration:  {dtes:.0f} DTEs
-       Maximium Expiration:  {max_dtes:.0f} DTEs
-           Take profits at:  {take_profit*100:.2f}% of premium sold""")
+        logging.debug("Initializing short put portfolio strategy:")
+        logging.debug("Monthly Withdrawals: $%.2f", distribution)
+        logging.debug("Notional Leverage:  %.2fx of NAV", leverage)
+        logging.debug("Inflation Rate:  %.2f%%", rf_rate)
+        logging.debug("Option Delta:  %.2f", delta)
+        logging.debug("Option Expiration:  %.0f DTEs", dtes)
+        logging.debug("Maximium Expiration:  %.0f DTEs", max_dtes)
+        logging.debug("Take profits at:  %.2f%% of premium sold", take_profit)
+
         self.monthly_dist = distribution
         self.leverage = leverage
         self.inflation = inflation
@@ -334,14 +343,14 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
     def _roll_current_put_position(self, cur_day: int, spot: float, atm_iv: float,
                                    position_size: int, orig_price: float,
                                    new_expiration: float, target_profit_price: float):
-        self.log(f"""Trying to roll put position with the following requirements:
-              Simulation day:  {cur_day}
-                        Spot: ${spot:,.2f}
-                      ATM IV:  {atm_iv*100.0:.2f}%
-      Original Position Size:  {position_size}
-          Put original price: ${orig_price:,.2f}
-              New Expiration:  {new_expiration:.0f} DTEs
-               Target Profit: ${target_profit_price:,.2f}""")
+        logging.debug("Trying to roll put position with the following requirements:")
+        logging.debug("Simulation day:  %d", cur_day)
+        logging.debug("Spot: $%.2f", spot)
+        logging.debug("ATM IV:  %.2f%%", atm_iv)
+        logging.debug("Original Position Size:  %d", position_size)
+        logging.debug("Put original price: $%.2f", orig_price)
+        logging.debug("New Expiration:  %.0f DTEs", new_expiration)
+        logging.debug("Target Profit: $%.2f", target_profit_price)
 
         yearly_expiration = new_expiration/365.0
         strike, price, delta, iv = self._find_put_strike_by_price(
@@ -363,9 +372,9 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
         days: int,                    # Days to run the simulation
         full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
-        self.log(f"""Starting simulation, initial parameters:
-            Initial NAV: ${initial_nav:,.2f}
-            Days to run:  {days}""")
+        logging.debug("Starting simulation, initial parameters:")
+        logging.debug("Initial NAV: $%.2f", initial_nav)
+        logging.debug("Days to run:  %d", days)
 
         self.track_book = full_book
         self.svi = svi
@@ -384,8 +393,8 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             nav, current_leverage, self.delta,
             self.dtes, self.take_profit)
 
-        self.log(f"""First short put trade:
-             Initial cash after trade: ${cash:,.2f}""")
+        logging.debug("First short put trade:")
+        logging.debug("Initial cash after trade: $%.2f", cash)
 
         return_path = np.zeros(days)
         return_path[0] = nav
@@ -398,9 +407,9 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
             if d % 21 == 0:
                 cash -= self.monthly_dist
-                self.log(f"""End of month.
-                Subtracted distribution: ${self.monthly_dist:,.2f}
-                           cash balance: ${cash:,.2f}""")
+                logging.debug("End of month.")
+                logging.debug("Subtracted distribution: $%.2f", self.monthly_dist)
+                logging.debug("cash balance: $%.2f", cash)
                 if full_book:
                     self.book.append({
                         "day": d,
@@ -418,16 +427,15 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
             # VIX Term Structure Check
             backwardation = today_vix > today_vix3m
 
-            self.log(f"""
-                Simulation at day:  {d}
-                         SPX Spot: ${today_spot:,.2f}
-                              VIX:  {today_vix*100:.2f}%
-                           VIX 3M:  {today_vix3m*100:.2f}%
-            VIX in backwardation?:  {backwardation}
-                       SPX EMA-20: ${ema20[d]:,.2f}
-                             Cash: ${cash:,.2f}
-                              NAV: ${nav:,.2f}
-                    Options state:  {state}""")
+            logging.debug("Simulation at day:  %d", d)
+            logging.debug("SPX Spot: $%.2f", today_spot)
+            logging.debug("VIX:  %.2f%%", today_vix)
+            logging.debug("VIX 3M:  %.2f%%", today_vix3m)
+            logging.debug("VIX in backwardation?: %s", str(backwardation))
+            logging.debug("SPX EMA-20: $%.2f", ema20[d])
+            logging.debug("Cash: $%.2f", cash)
+            logging.debug("NAV: $%.2f", nav)
+            logging.debug("Options state: %s", state)
 
             buy_to_close = False
             roll_option = False
@@ -445,14 +453,14 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                         d, today_spot, today_vix, nav,
                         current_leverage, self.delta, self.dtes,
                         self.take_profit)
-                    self.log(f"""New short put trade:
-                    Cash before trade: ${prev_cash:,.2f}
-                     Cash after trade: ${cash:,.2f}""")
+                    logging.debug("New short put trade:")
+                    logging.debug("Cash before trade: $%.2f", prev_cash)
+                    logging.debug("Cash after trade: $%.2f", cash)
 
             if state in ['active', 'wade_in']:
                 # If there are no live option positions, open one now.
                 if len(self.live_options_book['sto']) == 0:
-                    self.log("No current live options in the book, selling new ones")
+                    logging.debug("No current live options in the book, selling new ones")
                     cash += self._sell_to_open_put(
                         d, today_spot, today_vix, nav,
                         current_leverage, self.delta,
@@ -464,10 +472,10 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                         prev_cash = cash
                         nav = nav + cash
                         cash = 0.0
-                        self.log(f"""Reinvesting / withdrawing cash after options trade:
-                        Previous NAV: ${prev_nav:,.2f}
-                        After-trade NAV: ${nav:,.2f}
-                        Previous Cash: ${prev_cash:,.2f}""")
+                        logging.debug("Reinvesting / withdrawing cash after options trade:")
+                        logging.debug("Previous NAV: $%.2f", prev_nav)
+                        logging.debug("After-trade NAV: $%.2f", nav)
+                        logging.debug("Previous Cash: $%.2f", prev_cash)
 
                     return_path[d] = nav
                     continue
@@ -538,16 +546,16 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
                 if buy_to_close:
                     assert not roll_option
-                    self.log("Trying to close option (not roll)")
+                    logging.debug("Trying to close option (not roll)")
                     book_debit = self._buy_to_close_put(
                         d, put_strike, lbe["expiration"],
                         book_put_delta, book_put_iv, book_put_price,
                         put_size, put_orig_price)
                     prev_cash = cash
                     cash += book_debit
-                    self.log(f"""Deducting option book buy to close:
-                    Cash before trade: ${prev_cash:,.2f}
-                     Cash after trade: ${cash:,.2f}""")
+                    logging.debug("Deducting option book buy to close:")
+                    logging.debug("Cash before trade: $%.2f", prev_cash)
+                    logging.debug("Cash after trade: $%.2f", cash)
                     if state != 'cooldown':
                         premium = self._sell_to_open_put(
                             d, today_spot, today_vix, nav,
@@ -557,7 +565,7 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
 
                 if roll_option:
                     assert not buy_to_close
-                    self.log("Trying to roll current options position")
+                    logging.debug("Trying to roll current options position")
                     book_debit = self._buy_to_close_put(
                         d, put_strike, lbe["expiration"], book_put_delta,
                         book_put_iv, book_put_price, put_size, put_orig_price)
@@ -565,9 +573,9 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                     prev_cash = cash
                     cash += book_debit
 
-                    self.log(f"""Deducting option book buy to close and roll:
-                    Cash before trade: ${prev_cash:,.2f}
-                     Cash after trade: ${cash:,.2f}""")
+                    logging.debug("Deducting option book buy to close and roll:")
+                    logging.debug("Cash before trade: $%.2f", prev_cash)
+                    logging.debug("Cash after trade: $%.2f", cash)
 
                     remaining_exp = lbe["expiration"] + lbe["day"] - d
                     new_expiration = lbe["expiration"] + self.dtes
@@ -577,15 +585,13 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                             d, today_spot, today_vix, put_size,
                             book_put_price, new_expiration,
                             put_orig_price * (1.0 - self.take_profit))
-                        self.log(f"""
-                     Rolled option remaining: {remaining_exp:.0f} DTEs
-                    New put expiration to be: {new_expiration:.0f} DTEs
-                            Expiration limit: {self.limit_dtes:.0f} DTEs""")
+                        logging.debug("Rolled option remaining: %.0f DTEs", remaining_exp)
+                        logging.debug("New put expiration to be: %.0f DTEs", new_expiration)
+                        logging.debug("Expiration limit: %.0f DTEs", self.limit_dtes)
                     else:
-                        self.log(f"""
-                        Current options position exceeded the expiration
-                        limit permitted of {self.limit_dtes:.0f} DTEs.
-                        Selling new option instead.""")
+                        logging.debug("Current options position exceeded the expiration")
+                        logging.debug("limit permitted of %0f DTEs.", self.limit_dtes)
+                        logging.debug("Selling new option instead.")
                         cash += self._sell_to_open_put(
                             d, today_spot, today_vix, nav,
                             current_leverage, self.delta,
@@ -597,17 +603,17 @@ class ShortSPXPutStrategy(SPXPutOptionStrategy):
                 prev_cash = cash
                 nav = nav + cash
                 cash = 0.0
-                self.log(f"""Reinvesting / withdrawing cash after options trade:
-                Previous NAV: ${prev_nav:,.2f}
-                After-trade NAV: ${nav:,.2f}
-                Previous Cash: ${prev_cash:,.2f}""")
+                logging.debug("Reinvesting / withdrawing cash after options trade:")
+                logging.debug("Previous NAV: $%.2f", prev_nav)
+                logging.debug("After-trade NAV: $%.2f", nav)
+                logging.debug("Previous Cash: $%.2f", prev_cash)
 
             return_path[d] = nav
 
         # In order to make this portfolio stitchable, we need to close
         # all live option positions at the end of the simulation.
         if len(self.live_options_book['sto']) == 1:
-            self.log("Closing remaining live short options:")
+            logging.debug("Closing remaining live short options:")
             # TODO: Consider integrating all this logic in the private
             #       method _buy_to_close_put
             lbe = self.live_options_book['sto'][0]

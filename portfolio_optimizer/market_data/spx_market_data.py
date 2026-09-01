@@ -83,10 +83,10 @@ class IBKRSPXMarketData:
                 return json.loads(raw_data)
 
         except urllib.error.HTTPError as e:
-            print(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")
+            logging.error(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")
             return {}
         except urllib.error.URLError as e:
-            print(f"Network / Gateway Connection Error: {e.reason}")
+            logging.error(f"Network / Gateway Connection Error: {e.reason}")
             return {}
 
     def _get_historical_data(self, conid: str, end_date: date,
@@ -337,7 +337,7 @@ def main():
     if args.iv_surface:
         option_type = args.iv_surface.lower()
         if option_type not in ["call", "put"]:
-            print(f"Invalid option type: '{option_type}'", file=sys.stderr)
+            logging.error(f"Invalid option type: '{option_type}'")
             sys.exit(1)
 
         spx, vix, expiration, surface = \
