@@ -19,7 +19,7 @@
      - [x] A portfolio that can produce linear combinations of the aforementioned fundamental portfolios.
   8. [ ] Implement a tool to find the efficient frontier varying a matrix of portfolio parameters.
   9. [ ] Figure out how to discount the inflation.
- 10. [ ] Implement a more robust logging infrastructure.
+ 10. [x] Implement a more robust logging infrastructure.
  11. [ ] Portfolio comparison using the exact trajectories.
      - [ ] Generate the trajectories first and then run each desired portfolio configuration in parallel with the previously generated trajectories.
  12. [ ] Make more parametrizable choices for the SPX Short Put portfolio:
@@ -28,5 +28,5 @@
      - [ ] Tail expiration hard close criteria.
      - [ ] Notional leverage reduction during wade-in.
  13. [x] Get rid of the hard coded array of arguments on the options book and use a dictionary instead to make the code self-documenting.
- 14. [ ] Transaction tracking incomplete for all portfolios.
- 15. [ ] Historical data tool needs to pull both SPX, VIX and VIX3M.
+ 14. [x] Transaction tracking incomplete for all portfolios.
+ 15. [x] Historical data tool needs to pull both SPX, VIX and VIX3M.

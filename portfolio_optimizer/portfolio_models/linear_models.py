@@ -74,10 +74,12 @@ class FixedIncomeStrategy(InvestmentStrategy):
     """
     def __init__(self,
                  rate=0.03,            # Annualized interest rate
-                 compounding='daily'): # 'daily', 'monthly' or
+                 compounding='daily',  # 'daily', 'monthly' or
                                        # 'continuous' compounding
+                 monthly=0.0):    # Monthly distribution
         super().__init__()
         self.rate = rate
+        self.monthly = monthly
         comp = compounding.lower()
 
         if comp not in ['daily', 'monthly', 'continous']:
@@ -116,6 +118,19 @@ class FixedIncomeStrategy(InvestmentStrategy):
                     current_nav *= 1 + monthly_rate
             else:
                 current_nav *= math.exp(self.rate / 252.0)
+
+            if d % 21 == 0:
+                # Subract monthly distribution
+                if self.monthly != 0.0:
+                    current_nav -= self.monthly
+                    # Mark it in the transactions book
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "withdrawal",
+                            "price": -self.monthly
+                        })
+
             path[d] = current_nav
         return path
 
@@ -130,12 +145,14 @@ class FixedIncomeStrategy(InvestmentStrategy):
         {
             "type": "FixedIncomeStrategy",
             "rate": interest_rate,
-            "compounding": "continuous" | "daily" | "monthly"
+            "compounding": "continuous" | "daily" | "monthly",
+            "monthly": monthly_withdrawals
         }
         """
         if o["type"] != "FixedIncomeStrategy":
             return None
-        return FixedIncomeStrategy(float(o["rate"]), o["compounding"])
+        return FixedIncomeStrategy(
+            float(o["rate"]), o["compounding"], float(o["monthly"]))
 
 
 class LongSPYStrategy(InvestmentStrategy):
@@ -144,12 +161,14 @@ class LongSPYStrategy(InvestmentStrategy):
     for quarterly dividend distributions.
     """
     def __init__(self,
-                 avg_yield=0.0105): # SP500's average dividend yield.
+                 avg_yield=0.0105,  # SP500's average dividend yield.
+                 monthly=0.0):      # Monthly withdrawals
         super().__init__()
-        logging.info("Initializing long SPY portfolio strategy: "
-                     "Average Dividend Yield: %.2f%""",
-                     avg_yield * 100.0)
+        logging.debug("Initializing long SPY portfolio strategy:")
+        logging.debug("Average Dividend Yield: %.2f%%", avg_yield)
+        logging.debug("Monthly Distribution: %.2f", monthly)
         self.avg_yield = avg_yield
+        self.monthly = monthly
 
 
     def run_simulation(
@@ -176,15 +195,54 @@ class LongSPYStrategy(InvestmentStrategy):
         cash = 0.0
         path = np.zeros(days)
         for d in range(0, days):
+            spy_price = spot_spx[d] / 10.0
+            if d % 21 == 0:
+                # Take monthly distribution from dividends
+                # and shares.
+                if self.monthly != 0:
+                    # First try to withdraw from floating cash
+                    deficit = self.monthly
+                    if cash >= self.monthly:
+                        cash -= self.monthly
+                        if full_book:
+                            self.book.append({
+                                "day": d,
+                                "trade": "withdrawal",
+                                "price": self.monthly
+                            })
+                        deficit = 0.0
+                    else:
+                        deficit -= cash
+                        prev_cash = cash
+                        cash = 0.0
+                        if full_book and prev_cash > 0:
+                            self.book.append({
+                                "day": d,
+                                "trade": "withdrawal",
+                                "price": prev_cash
+                            })
+                    assert deficit >= 0
+                    assert cash >= 0
+                    if deficit > 0:
+                        shares_to_sell = deficit / spy_price
+                        shares -= shares_to_sell
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "sell",
+                            "size": shares_to_sell,
+                            "price": spy_price,
+                            "total": self.monthly
+                        })
             if d % 63 == 0:
                 if full_book:
                     self.book.append({
                         "day": d,
                         "trade": "dividend",
-                        "price": shares * (spot_spx[d] / 10) * quarterly_yield
+                        "price": shares * spy_price * quarterly_yield
                     })
                 cash += shares * quarterly_yield
-            nav = shares * (spot_spx[d] / 10.0) + cash
+            nav = shares * spy_price + cash
             path[d] = nav
         return path
 
@@ -199,12 +257,14 @@ class LongSPYStrategy(InvestmentStrategy):
         must have the following shape:
         {
             "type": "LongSPYStrategy",
-            "avg_yield": dividend_yield
+            "avg_yield": dividend_yield,
+            "monthly": monthly_withdrawals
         }
         """
         if o["type"] != "LongSPYStrategy":
             return None
-        return LongSPYStrategy(float(o["avg_yield"]))
+        return LongSPYStrategy(float(o["avg_yield"]),
+                               float(o["monthly"]))
 
 
 class CombinedPortfolioStrategy(InvestmentStrategy):
@@ -228,9 +288,9 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
             raise ValueError("Portfolio weighs more than 100%")
 
         if total_weight < 1.0:
-            self.log(f"""Warning: Portfolio components don't add to 100%,
-                  keeping the remainder {(1.0 - total_weight) * 100:.2f}%
-                  in cash""")
+            rem = 1.0 - total_weight
+            logging.debug("Warning: Portfolio components don't add to 100%,")
+            logging.debug("keeping the remainder %.2f%% in cash", rem)
         self.components = components
 
 
