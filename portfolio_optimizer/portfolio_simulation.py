@@ -8,6 +8,7 @@ import argparse
 import datetime
 import json
 import logging
+import sys
 import time
 import os
 
@@ -32,7 +33,7 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
             spot_spx, spot_vix, num_days)
 
     svcj = None
-    if config["seed"] is not None:
+    if "seed" in config:
         svcj = SVCJSimulation(seed=config["seed"])
     else:
         svcj = SVCJSimulation()
@@ -205,17 +206,33 @@ def parse_args():
                         action="store_true",
                         dest="single_path",
                         default=False)
+    parser.add_argument("-l", "--log-level",
+                        help="Logging level: DEBUG | INFO | WARNING | ERROR",
+                        dest="log_level",
+                        default="INFO")
     return parser.parse_args()
 
 
 def main():
     "CLI entry point"
+    args = parse_args()
+    log_level = args.log_level.upper()
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING
+    }
+
+    if log_level not in level_map:
+        logging.error("Invalid log level: %s", log_level)
+        sys.exit(2)
+
     logging.basicConfig(
         format="%(asctime)s:%(filename)s:"
                "%(lineno)d:%(levelname)s: %(message)s",
-        level=logging.INFO)
+        level=level_map[log_level])
     logging.info("Starting Portfolio Simulation CLI tool.")
-    args = parse_args()
 
     log_msg = f"""Parameters for the simulation:
               IV Surface File: {args.iv_surface_json}
@@ -228,9 +245,6 @@ def main():
                   Concurrency: {args.concurrency}
        Single path simulation: {args.single_path}"""
     logging.info(log_msg)
-
-    if args.rng_seed is not None:
-        logging.info("Seeding RNG with %d", args.rng_seed)
 
     # Start the timer
     init_start_time = time.perf_counter()
@@ -294,6 +308,8 @@ def main():
 
     single_path_data = None
     if args.single_path:
+        if args.rng_seed is not None:
+            config["seed"] = args.rng_seed
         sp_start = time.perf_counter()
         single_path_data = run_single_path(config, portfolio)
         sp_end = time.perf_counter()

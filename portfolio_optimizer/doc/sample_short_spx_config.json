@@ -9,7 +9,7 @@
                 "dtes": 45,
                 "inflation": 0.025,
                 "leverage": 0.5,
-                "max_dtes": 135,
+                "max_dtes": 136,
                 "rf_rate": 0.03,
                 "take_profit": 0.75
             },

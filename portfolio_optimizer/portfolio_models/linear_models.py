@@ -196,6 +196,14 @@ class LongSPYStrategy(InvestmentStrategy):
         path = np.zeros(days)
         for d in range(0, days):
             spy_price = spot_spx[d] / 10.0
+            if d % 63 == 0:
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "dividend",
+                        "price": shares * spy_price * quarterly_yield
+                    })
+                cash += shares * spy_price * quarterly_yield
             if d % 21 == 0:
                 # Take monthly distribution from dividends
                 # and shares.
@@ -226,22 +234,14 @@ class LongSPYStrategy(InvestmentStrategy):
                     if deficit > 0:
                         shares_to_sell = deficit / spy_price
                         shares -= shares_to_sell
-                    if full_book:
-                        self.book.append({
-                            "day": d,
-                            "trade": "sell",
-                            "size": shares_to_sell,
-                            "price": spy_price,
-                            "total": self.monthly
-                        })
-            if d % 63 == 0:
-                if full_book:
-                    self.book.append({
-                        "day": d,
-                        "trade": "dividend",
-                        "price": shares * spy_price * quarterly_yield
-                    })
-                cash += shares * quarterly_yield
+                        if full_book:
+                            self.book.append({
+                                "day": d,
+                                "trade": "sell",
+                                "size": shares_to_sell,
+                                "price": spy_price,
+                                "total": self.monthly
+                            })
             nav = shares * spy_price + cash
             path[d] = nav
         return path

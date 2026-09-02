@@ -4,7 +4,8 @@
         {
             "portfolio": {
                 "type": "LongSPYStrategy",
-                "avg_yield": 0.0105
+                "avg_yield": 0.0105,
+                "monthly": 12500
             },
             "weight": 1.0
         }
