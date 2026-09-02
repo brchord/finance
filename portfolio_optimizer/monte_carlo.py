@@ -8,6 +8,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 from portfolio_models.linear_models import InvestmentStrategy
+from market_modelling.svcj import SVCJSimulation
+from market_modelling.dsvi import DynamicSVI
 
 class MonteCarloEngine:
     """
@@ -18,19 +20,33 @@ class MonteCarloEngine:
     object-oriented structure.
     """
 
-    def __init__(self, strategy_class: type[InvestmentStrategy], init_kwargs: dict | None = None):
-        self.strategy_class = strategy_class
-        self.init_kwargs = init_kwargs or {}
+    def __init__(self,
+                 strategy: InvestmentStrategy,
+                 svi: DynamicSVI,
+                 start_spx: float,
+                 start_vix: float,
+                 days: int,
+                 initial_nav: float,
+                 base_seed: int):
+        self.strategy = strategy
+        self.svi = svi
+        self.start_spx = start_spx
+        self.start_vix = start_vix
+        self.days = days
+        self.initial_nav = initial_nav
+        self.rng = np.random.default_rng(seed=base_seed)
+
 
     @staticmethod
     def _execute_strategy_batch(
-        strategy_class: type[InvestmentStrategy],
-        init_kwargs: dict,
-        initial_nav: float,
+        strategy: InvestmentStrategy,
+        svi: DynamicSVI,
+        start_spx: float,
+        start_vix: float,
         days: int,
+        initial_nav: float,
         num_paths: int,
-        base_seed: int | None,
-        worker_id: int
+        seed: int
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Static worker method executing a batch of paths inside a separate process.
@@ -44,36 +60,34 @@ class MonteCarloEngine:
         3. Annualized return.
         4. Max drawdown.
         """
-        strategy = strategy_class(**init_kwargs)
-
-        rng_seed = None if base_seed is None else base_seed + worker_id
-        np.random.seed(rng_seed)
-
         final_navs = np.empty(num_paths)
         total_returns = np.empty(num_paths)
         annualized_returns = np.empty(num_paths)
         max_drawdowns = np.empty(num_paths)
 
+        svcj = SVCJSimulation(seed=seed)
+
         for i in range(num_paths):
-            path_navs = strategy.run_simulation(initial_nav=initial_nav, days=days)
+            spx_path, vix_path, vix3m_path = svcj.generate_path(
+                start_spx, start_vix, days)
+            path_navs = strategy.run_simulation(
+                spot_spx=spx_path, spot_vix=vix_path, vix3m=vix3m_path,
+                initial_nav=initial_nav, svi=svi, days=days, full_book=False)
 
             final_navs[i] = path_navs[-1]
             total_returns[i] = (path_navs[-1] - initial_nav) / initial_nav
             annualized_returns[i] = np.pow(total_returns[i], 252.0 / days)
             peak = np.maximum.accumulate(path_navs)
             drawdowns = (peak - path_navs) / peak
-            max_drawdowns[i] = np.max(drawdowns)
+            max_drawdowns[i] = -np.max(drawdowns)
 
         return final_navs, total_returns, annualized_returns, max_drawdowns
 
 
     def run(
-        self,
-        initial_nav: float = 100000.0,
-        days: int = 252,
+        self, *,
         total_paths: int = 10000,
         n_workers: int = 8,
-        base_seed: int | None = 42
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Spawns and manages the parallel execution pool across available worker cores.
@@ -82,12 +96,10 @@ class MonteCarloEngine:
         chunks = []
 
         remaining_paths = total_paths
-        worker_id = 0
         while remaining_paths > 0:
             current_batch_size = min(chunk_size, remaining_paths)
-            chunks.append((current_batch_size, worker_id))
+            chunks.append(current_batch_size)
             remaining_paths -= current_batch_size
-            worker_id += 1
 
         all_final_navs = []
         all_final_returns = []
@@ -97,16 +109,17 @@ class MonteCarloEngine:
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
                 executor.submit(
-                    self._execute_strategy_batch,
-                    self.strategy_class,
-                    self.init_kwargs,
-                    initial_nav,
-                    days,
+                    MonteCarloEngine._execute_strategy_batch,
+                    self.strategy,
+                    self.svi,
+                    self.start_spx,
+                    self.start_vix,
+                    self.days,
+                    self.initial_nav,
                     batch_size,
-                    base_seed,
-                    wid
+                    int(self.rng.integers(1 << 31))
                 )
-                for batch_size, wid in chunks
+                for batch_size in chunks
             ]
 
             for future in as_completed(futures):

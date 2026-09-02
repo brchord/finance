@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 
+import monte_carlo as mc
 import portfolio_models.linear_models as lm
 
 from market_modelling.dsvi import DynamicSVI
@@ -130,11 +131,6 @@ def run_backtest(config: dict, portfolio: lm.CombinedPortfolioStrategy):
         return output
 
 
-def run_monte_carlo(config: dict, portfolio: lm.CombinedPortfolioStrategy):
-    "Run a monte carlo simulation."
-    logging.info("Orchestrating Monte Carlo Simulation...")
-    logging.info(config)
-    logging.info(portfolio)
 
 
 def parse_args():
@@ -288,8 +284,6 @@ def main():
         "days": args.days,
         "svi": svi
     }
-    if args.rng_seed:
-        config["seed"] = args.rng_seed
 
     logging.info("Successfully loaded portfolio architecture")
 
@@ -319,7 +313,33 @@ def main():
             json.dump(single_path_data, f)
             return 0
 
-    run_monte_carlo(config, portfolio)
+    logging.info("Orchestrating Monte Carlo Simulation...")
+    seed = 0
+    if args.rng_seed is not None:
+        seed = args.rng_seed
+
+    mcs = mc.MonteCarloEngine(
+        portfolio,
+        svi,
+        surface_spot,
+        surface_atm_iv,
+        args.days,
+        args.initial_nav,
+        seed)
+
+    mc_start = time.perf_counter()
+    navs, returns, a_returns, max_dds = mcs.run(total_paths=args.num_paths)
+    mc_end = time.perf_counter()
+    total_time = float(mc_end - mc_start)
+    logging.info("Monte Carlo simulation completed.  Took: %2fs", total_time)
+    with open(args.output_file, "w", encoding=" utf-8") as f:
+        print('"Terminal NAV", "Total Return", "Annualized Return", "Max Drawdown"',
+              file=f)
+        for i, nav in enumerate(navs):
+            output_row = f"{nav:,.2f}, {returns[i]:.2f}, " + \
+                         f"{a_returns[i]:.2f}, {max_dds[i]:,.2f}"
+            print(output_row, file=f)
+
     return 0
 
 
