@@ -32,17 +32,16 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     logging.info("SVCJ parameters: [Spot SPX: %.2f, Spot VIX: %.2f, Days: %d]",
             spot_spx, spot_vix, num_days)
 
-    svcj = None
+    svcj = SVCJSimulation(spot_spx, spot_vix)
     if "seed" in config:
-        svcj = SVCJSimulation(seed=config["seed"])
+        spx, vix, vix3m = svcj.simulate_paths(num_days, 1, config["seed"])
     else:
-        svcj = SVCJSimulation()
+        spx, vix, vix3m = svcj.simulate_paths(num_days, 1)
 
-    spx, vix, vix3m = svcj.generate_path(spot_spx, spot_vix, num_days)
     spot_nav = portfolio.run_simulation(
-        spot_spx=spx,
-        spot_vix=vix,
-        vix3m=vix3m,
+        spot_spx=spx[:, 0],
+        spot_vix=vix[:, 0],
+        vix3m=vix3m[:, 0],
         svi=config["svi"],
         initial_nav=config["nav"],
         days=config["days"],
@@ -130,8 +129,6 @@ def run_backtest(config: dict, portfolio: lm.CombinedPortfolioStrategy):
         }
 
         return output
-
-
 
 
 def parse_args():
@@ -352,16 +349,17 @@ def main():
         seed)
 
     mc_start = time.perf_counter()
-    navs, returns, a_returns, max_dds = mcs.run(total_paths=args.num_paths)
+    navs, returns, returns_pct, max_dds = mcs.run(
+        total_paths=args.num_paths, n_workers=config["conc"])
     mc_end = time.perf_counter()
     total_time = float(mc_end - mc_start)
     logging.info("Monte Carlo simulation completed.  Took: %2fs", total_time)
     with open(args.output_file, "w", encoding=" utf-8") as f:
-        print('"Terminal NAV", "Total Return", "Annualized Return", "Max Drawdown"',
+        print('"Terminal NAV", "Total Return", "Pct of Initial NAV", "Max Drawdown"',
               file=f)
         for i, nav in enumerate(navs):
-            output_row = f"{nav:,.2f}, {returns[i]:.2f}, " + \
-                         f"{a_returns[i]:.2f}, {max_dds[i]:,.2f}"
+            output_row = f"{nav:.2f}, {returns[i]:.2f}, " + \
+                         f"{returns_pct[i]:.2f}, {max_dds[i]:,.2f}"
             print(output_row, file=f)
 
     return 0

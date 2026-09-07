@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import override
 
 import numpy as np
+import pandas as pd
 
 from market_modelling.dsvi import DynamicSVI
 
@@ -343,8 +344,11 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
 
         if o["type"] != "CombinedPortfolioStrategy":
             return None
-        models = [FixedIncomeStrategy, LongSPYStrategy,
-                  ShortSPXPutStrategy, SPXPutCreditSpreadStrategy]
+        models = [SPXPutCreditSpreadStrategy,
+                  LongSPYWithTreasuryLadders,
+                  ShortSPXPutStrategy,
+                  LongSPYStrategy,
+                  FixedIncomeStrategy]
         components = o["components"]
         portfolios = []
         for c in components:
@@ -356,3 +360,318 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
                     portfolios.append((po, w))
                     continue
         return CombinedPortfolioStrategy(portfolios)
+
+
+class LongSPYWithTreasuryLadders(InvestmentStrategy):
+    """
+    Simulates a portfolio comprised of a configurable long SPY sleeve
+    and a fixed income T-Bill/T-Note ladder composed of
+        - 20% short term T-Bills
+        - 20% 2-year T-Note
+        - 40% 3-year T-Note
+        - 20% 5-year T-Note
+
+    It properly models monthly withdrawals adjusted for inflation, proper
+    distributions for each T-Note and equity dividends at their expected
+    schedules.
+
+    It automatically rebalances the portfolio attempting to sell equity
+    at favorable prices (when price action shows a spot price going above
+    the SMA-180, SMA-90 and the EMA-30 simultaneosly) and buying the
+    corresponding T-Note that comes to the next maturity of the oldest one
+    on the trading book.
+    """
+    def __init__(self,
+                 equity_allocation: float,
+                 ladder_allocation: float,
+                 yearly_spending: float,
+                 monthly_tbill_rate: float = 0.038,
+                 average_tnote_rate: float = 0.042,
+                 spy_avg_dividend_yield: float = 0.01,
+                 average_inflation: float = 0.034):
+        if equity_allocation + ladder_allocation != 1.0:
+            raise ValueError("Portfolio allocation must sum up to 100%")
+        super().__init__()
+        self.equity_allocation = equity_allocation
+        self.ladder_allocation = ladder_allocation
+        self.yearly_spending = yearly_spending
+        self.tbill_rate = monthly_tbill_rate
+        self.tnote_rate = average_tnote_rate
+        self.spy_div_yield = spy_avg_dividend_yield
+        self.inflation = average_inflation
+
+
+    def run_simulation(self, *, spot_spx, spot_vix, vix3m, svi, initial_nav, days, full_book=False):
+        monthly_withdrawal = self.yearly_spending / 12
+        tbill_daily_rate = self.tbill_rate / 252
+        tnote_half_rate = self.tnote_rate / 2
+
+        current_nav = initial_nav
+        spot_spx = spot_spx / 10.0
+        spy_price = spot_spx[0]
+        spy_position_size = math.ceil(initial_nav * self.equity_allocation / spy_price)
+        tnote_amount = initial_nav * self.ladder_allocation / 5.0
+
+        tnotes = {
+            0: (252 * 2, tnote_amount),
+            1: (252 * 3, tnote_amount * 2),
+            2: (252 * 5, tnote_amount)
+        }
+        tnote_id = 3
+        cash = initial_nav - tnote_amount * 4 - spy_price * spy_position_size
+
+        if full_book:
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "symbol": "SPY",
+                "price": spy_price,
+                "size": spy_position_size,
+                "total": spy_price * spy_position_size,
+                "description": f"Initial long equity at {self.equity_allocation*100.0}%"
+            })
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "symbol": "T-Note 2 Years",
+                "price": tnote_amount,
+                "rate": self.tnote_rate,
+                "maturity": 252 * 2,
+                "description": "Initial T-Note ladder setup"
+            })
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "symbol": "T-Note 3 Years",
+                "price": tnote_amount * 2,
+                "rate": self.tnote_rate,
+                "maturity": 252 * 3,
+                "description": "Initial T-Note ladder setup"
+            })
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "symbol": "T-Note 5 Years",
+                "price": tnote_amount,
+                "rate": self.tnote_rate,
+                "maturity": 252 * 5,
+                "description": "Initial T-Note ladder setup"
+            })
+            self.book.append({
+                "day": 0,
+                "trade": "buy",
+                "price": cash,
+                "rate": self.tbill_rate,
+                "description": "Cash equivalents in short term t-bills"
+            })
+
+        spx_df = pd.Series(spot_spx)
+        ema30 = spx_df.ewm(span=20, adjust=False).mean().values
+        sma90 = spx_df.rolling(window=63).mean()
+        sma180 = spx_df.rolling(window=126).mean()
+        return_path = np.zeros(days)
+
+        for d in range(0, days):
+            day_num = d + 1
+            day_spy = spot_spx[d]
+            transaction_day = False
+
+            # Account for monthly withdrawals
+            if day_num % 21 == 0:
+                cash -= monthly_withdrawal
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "withdrawal",
+                        "price": -monthly_withdrawal,
+                        "description": "Monthly expense distribution"
+                    })
+                    transaction_day = True
+            # Account for SPY dividend distribution
+            if day_num % 63 == 0:
+                cash_dividend = spy_position_size * day_spy * self.spy_div_yield / 4.0
+                cash += cash_dividend
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "dividend",
+                        "price": cash_dividend,
+                        "description": "SPY dividend payment"
+                    })
+                    transaction_day = True
+
+            cash *= 1 + tbill_daily_rate
+
+            # Account for t-note distribution
+            expired_notes = []
+            for idx, (maturity, amount) in tnotes.items():
+                tnote_day = maturity - d - 1
+                if tnote_day % (252 / 2) == 0:
+                    tnote_coupon = amount * tnote_half_rate
+                    cash += tnote_coupon
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "dividend",
+                            "price": tnote_coupon,
+                            "description": "T-Note coupon payment"
+                        })
+                        transaction_day = True
+                    if tnote_day <= 0:
+                        expired_notes.append(idx)
+
+            for expired_note in expired_notes:
+                (maturity, amount) = tnotes.pop(expired_note)
+                cash += amount
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "deposit",
+                        "price": amount,
+                        "description": "T-Note maturity reached"
+                    })
+                    transaction_day = True
+
+            tnote_position = sum(amount for _, (_, amount) in tnotes.items())
+
+            current_nav = cash + spy_position_size * day_spy + tnote_position
+            fixed_income_position = cash + tnote_position
+            # If the fixed income position goes below 80% of what it should be,
+            # consider rebalancing the portfolio if equity pricing conditions are
+            # favorable (i.e. crosses  SMA 180, SMA 90 and EMA 30).
+            if fixed_income_position / current_nav <= self.ladder_allocation * 0.8:
+                # Current spot is beyond EMA30, SMA90 and SMA120.
+                if d >= 180 and day_spy >= ema30[d] and day_spy >= sma90[d] \
+                            and day_spy >= sma180[d]:
+                    needed_amount = current_nav * self.ladder_allocation \
+                         - fixed_income_position
+                    selling_position = math.ceil(needed_amount / day_spy)
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "sell",
+                            "symbol": "SPY",
+                            "size": selling_position,
+                            "price": day_spy,
+                            "description": "Portfolio rebalance to replenish "
+                                           "fixed income"
+                        })
+                        transaction_day = True
+                    spy_position_size -= selling_position
+                    cash += selling_position * day_spy
+
+            # If the liquid cash reserves fall below 6 months of runway, liquidate
+            # equity to fund in case of an emergency
+            # NOTE: Runway is defined as 6 months of needed extra liquidity
+            #       on top of what dividend distributions provide
+            expected_dividends = spy_position_size * spy_price * self.spy_div_yield / 2.0
+            six_month_needs = self.yearly_spending / 2.0
+            current_runway = cash - (six_month_needs - expected_dividends)
+            if current_runway < 0:
+                selling_position = math.ceil(-current_runway / day_spy)
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "sell",
+                        "price": day_spy,
+                        "size": selling_position,
+                        "description": "Selling shares to cover 6 months of runway"
+                    })
+                    transaction_day = True
+                spy_position_size -= selling_position
+                cash += selling_position * day_spy
+
+            # If we have too much cash sitting, it's important to move it to the
+            # T-Note ladder, check monthly to simulate monthly auctioning.
+            if day_num % 21 == 0 and cash >= 2 * current_nav * self.ladder_allocation / 5:
+                tnote_maturity = 0
+                if len(tnotes) == 0:
+                    tnote_maturity = 252*2
+                else:
+                    furthest_maturity = max(m for _, (m, _) in tnotes.items()) - d
+                    for m in [252*2, 252*3, 252*5]:
+                        if furthest_maturity < m:
+                            tnote_maturity = m
+                            break
+                assert tnote_maturity > 0
+                tnote_tranche = current_nav * self.ladder_allocation / 5
+                if full_book:
+                    self.book.append({
+                        "day": d,
+                        "trade": "buy",
+                        "symbol": f"T-Note {int(tnote_maturity / 252)} Years",
+                        "price": tnote_tranche,
+                        "rate": self.tnote_rate,
+                        "description": "T-Note ladder replenish"
+                    })
+                    transaction_day = True
+                tnotes[tnote_id] = (d + tnote_maturity, tnote_tranche)
+                tnote_id += 1
+                cash -= tnote_tranche
+
+            # Adjust monthly withdrawals for inflation each year
+            if day_num % 252 == 0:
+                monthly_withdrawal *= 1 + self.inflation
+
+            # Mark to market all positions
+            if full_book and transaction_day:
+                self.book.append({
+                    "day": d,
+                    "trade": "mtm",
+                    "symbol": "Cash",
+                    "price": cash,
+                    "description": "Cash MTM"
+                })
+                self.book.append({
+                    "day": d,
+                    "trade": "mtm",
+                    "symbol": "SPY",
+                    "price": day_spy,
+                    "size": spy_position_size,
+                    "total": spy_position_size * day_spy,
+                    "description": "SPY MTM"
+                })
+                for _, (m, v) in tnotes.items():
+                    self.book.append({
+                        "day": d,
+                        "trade": "mtm",
+                        "symbol": "T-Note",
+                        "maturity": m,
+                        "price": v,
+                        "description": "T-Note MTM"
+                    })
+
+            return_path[d] = current_nav
+
+        return return_path
+
+
+    @classmethod
+    def from_json_object(cls, o):
+        """
+        Builds a lambda that given an underlying, monthly volatility and
+        3 month forward volatility simulated paths returns an instance of
+        this portfolio strategy from a JSON parsed object. The structure
+        must have the following shape:
+        {
+            "type": "LongSPYWithTreasuryLadders",
+            "equity_allocation": 0.9,
+            "ladder_allocation": 0.1,
+            "yearly_spending": 60_000,
+            "monthly_tbill_rate": 0.038,
+            "average_tnote_rate": 0.042,
+            "dividend_yield": 0.01,
+            "average_inflation": 0.034
+        }
+        """
+        if o["type"] != "LongSPYWithTreasuryLadders":
+            return None
+
+        return LongSPYWithTreasuryLadders(
+            o["equity_allocation"],
+            o["ladder_allocation"],
+            o["yearly_spending"],
+            o["monthly_tbill_rate"],
+            o["average_tnote_rate"],
+            o["dividend_yield"],
+            o["average_inflation"])

@@ -62,26 +62,31 @@ class MonteCarloEngine:
         """
         final_navs = np.empty(num_paths)
         total_returns = np.empty(num_paths)
-        annualized_returns = np.empty(num_paths)
+        returns_as_pct = np.empty(num_paths)
         max_drawdowns = np.empty(num_paths)
 
-        svcj = SVCJSimulation(seed=seed)
+        svcj = SVCJSimulation(start_spx, start_vix)
+        spx_paths, vix_paths, vix3m_paths = svcj.simulate_paths(
+            days, num_paths, seed)
 
         for i in range(num_paths):
-            spx_path, vix_path, vix3m_path = svcj.generate_path(
-                start_spx, start_vix, days)
             path_navs = strategy.run_simulation(
-                spot_spx=spx_path, spot_vix=vix_path, vix3m=vix3m_path,
-                initial_nav=initial_nav, svi=svi, days=days, full_book=False)
+                spot_spx=spx_paths[:, i],
+                spot_vix=vix_paths[:, i],
+                vix3m=vix3m_paths[:, i],
+                initial_nav=initial_nav,
+                svi=svi,
+                days=days,
+                full_book=False)
 
             final_navs[i] = path_navs[-1]
             total_returns[i] = (path_navs[-1] - initial_nav) / initial_nav
-            annualized_returns[i] = np.pow(total_returns[i], 252.0 / days)
+            returns_as_pct[i] = path_navs[-1] / initial_nav
             peak = np.maximum.accumulate(path_navs)
             drawdowns = (peak - path_navs) / peak
             max_drawdowns[i] = -np.max(drawdowns)
 
-        return final_navs, total_returns, annualized_returns, max_drawdowns
+        return final_navs, total_returns, returns_as_pct, max_drawdowns
 
 
     def run(
@@ -103,7 +108,7 @@ class MonteCarloEngine:
 
         all_final_navs = []
         all_final_returns = []
-        all_final_ann_returns = []
+        all_final_pct_of_nav = []
         all_max_drawdowns = []
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -121,15 +126,14 @@ class MonteCarloEngine:
                 )
                 for batch_size in chunks
             ]
-
             for future in as_completed(futures):
-                f_navs, returns, ann_returns, m_dds = future.result()
+                f_navs, returns, pct_returns, m_dds = future.result()
                 all_final_navs.append(f_navs)
                 all_final_returns.append(returns)
-                all_final_ann_returns.append(ann_returns)
+                all_final_pct_of_nav.append(pct_returns)
                 all_max_drawdowns.append(m_dds)
 
         return np.concatenate(all_final_navs), \
             np.concatenate(all_final_returns), \
-            np.concatenate(all_final_ann_returns), \
+            np.concatenate(all_final_pct_of_nav), \
             np.concatenate(all_max_drawdowns)
