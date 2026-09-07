@@ -212,6 +212,38 @@ def parse_args():
                         default="INFO")
     return parser.parse_args()
 
+def load_iv_surface(json_file):
+    """
+    Pulls multi month volatility surface data from the output
+    of market_data/spx_market_data.py
+    """
+    with open(json_file, encoding="utf-8") as f:
+        iv_surface = json.load(f)
+        # Convert IBKR IV string into a floating point number
+        # and separate the zipped time series (Strike, IV) into
+        # independent arrays.
+        surface_spot = iv_surface["spot_spx"]
+        surface_atm_iv = iv_surface["spot_vix"] / 100.0
+        today = datetime.date.today()
+        chain = iv_surface["opt_chain"]
+        surface_chain = {}
+        for exp_str in chain.keys():
+            exp_yr = int(exp_str[0:4])
+            exp_m = int(exp_str[4:6])
+            exp_d = int(exp_str[6:])
+            expiration = datetime.date(exp_yr, exp_m, exp_d)
+            surface_expiration = (expiration - today).days
+            surface_expiration *= 1.0/365.0
+            surface_data = chain[exp_str]
+            surface_strikes = np.zeros(len(surface_data))
+            surface_ivs = np.zeros(len(surface_data))
+            for i, pair in enumerate(surface_data):
+                surface_strikes[i] = pair[0]
+                iv = float(pair[1][:-1]) / 100.0
+                surface_ivs[i] = iv
+            surface_chain[surface_expiration] = (surface_strikes, surface_ivs)
+        return surface_spot, surface_atm_iv, surface_chain
+
 
 def main():
     "CLI entry point"
@@ -252,36 +284,12 @@ def main():
     p_json = args.portfolio_json
 
     logging.info("Attempting to load IV surface data from %s", ivs_json)
-    surface_strikes = None
-    surface_ivs = None
-    surface_spot = None
-    surface_expiration = None
-    surface_atm_iv = None
 
-    with open(ivs_json, encoding="utf-8") as f:
-        iv_surface = json.load(f)
-        # Convert IBKR IV string into a floating point number
-        # and separate the zipped time series (Strike, IV) into
-        # independent arrays.
-        surface_spot = iv_surface["spot_spx"]
-        surface_atm_iv = iv_surface["spot_vix"] / 100.0
-        today = datetime.date.today()
-        exp_str = iv_surface["expiration"]
-        exp_yr = int(exp_str[0:4])
-        exp_m = int(exp_str[4:6])
-        exp_d = int(exp_str[6:])
-        expiration = datetime.date(exp_yr, exp_m, exp_d)
-        surface_expiration = (expiration - today).days
-        surface_expiration *= 1.0/365.0
-        surface_data = iv_surface["iv_surface"]
-        surface_strikes = np.zeros(len(surface_data))
-        surface_ivs = np.zeros(len(surface_data))
-        for i, pair in enumerate(surface_data):
-            surface_strikes[i] = pair[0]
-            iv = float(pair[1][:-1]) / 100.0
-            surface_ivs[i] = iv
-
-    svi = DynamicSVI(surface_strikes, surface_ivs, surface_spot, surface_expiration)
+    spot, atm_iv, surface_chain = load_iv_surface(ivs_json)
+    closest_exp = min(surface_chain.keys())
+    strikes = surface_chain[closest_exp][0]
+    ivs = surface_chain[closest_exp][1]
+    svi = DynamicSVI(strikes, ivs, spot, closest_exp)
     logging.info("Successfully loaded IV surface volatility data.")
     logging.info("Loading portfolio geometry...")
     portfolio = None
@@ -293,8 +301,8 @@ def main():
     config = {
         "nav": args.initial_nav,
         "conc": args.concurrency,
-        "spx": surface_spot,
-        "vix": surface_atm_iv,
+        "spx": spot,
+        "vix": atm_iv,
         "days": args.days,
         "svi": svi
     }
@@ -337,8 +345,8 @@ def main():
     mcs = mc.MonteCarloEngine(
         portfolio,
         svi,
-        surface_spot,
-        surface_atm_iv,
+        spot,
+        atm_iv,
         args.days,
         args.initial_nav,
         seed)

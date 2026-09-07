@@ -8,7 +8,9 @@ volatility smiles using real data from recent options
 Implied Volatility.
 """
 import argparse
+
 import copy
+import itertools
 import logging
 import json
 import math
@@ -17,6 +19,7 @@ import sys
 import urllib.error
 import urllib.request
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from urllib.parse import urlencode
 
@@ -83,10 +86,10 @@ class IBKRSPXMarketData:
                 return json.loads(raw_data)
 
         except urllib.error.HTTPError as e:
-            logging.error(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")
+            logging.error("HTTP Error %d: %s", e.code, e.read().decode('utf-8'))
             return {}
         except urllib.error.URLError as e:
-            logging.error(f"Network / Gateway Connection Error: {e.reason}")
+            logging.error("Network / Gateway Connection Error: %s", e.reason)
             return {}
 
     def _get_historical_data(self, conid: str, end_date: date,
@@ -183,47 +186,6 @@ class IBKRSPXMarketData:
         last_candle = hist_data["data"][-1]
         return last_candle["c"]
 
-    def _get_strike_contracts(self, spx_spot, option_type="call") -> dict[int, str]:
-        opt_contract_data = [x for x in self.spx_contract_data[0]["sections"]
-                             if x["secType"] == "OPT"]
-        opt_next_month = opt_contract_data[0]["months"].split(";")[1]
-        query_params = {
-            "conId": IBKRSPXMarketData.SPX_CON_ID,
-            "secType": "OPT",
-            "month": opt_next_month
-        }
-        query_string = urlencode(query_params)
-        strike_endpoint_url = f"{IBKRSPXMarketData.STRIKES_ENDPOINT}?{query_string}"
-        _ = self._get_request(strike_endpoint_url)
-        spx_low = spx_spot * (1 - IBKRSPXMarketData.DIST_FROM_SPOT)
-        spx_low = math.floor(spx_low / 100.0) * 100
-        spx_hi = spx_spot * (1 + IBKRSPXMarketData.DIST_FROM_SPOT)
-        spx_hi = math.ceil(spx_hi)
-        curr_strike = spx_low
-        option_contract_map = {}
-        expiration_set = set()
-        # Step 3. Validate option strike contracts
-        while curr_strike < spx_hi:
-            query_params = {
-                "conId": IBKRSPXMarketData.SPX_CON_ID,
-                "secType": "OPT",
-                "month": opt_next_month,
-                "strike": curr_strike,
-                "right": "C" if option_type == "call" else "P"
-            }
-            query_string = urlencode(query_params)
-            strike_check_url = f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}?{query_string}"
-            opt_contracts = self._get_request(strike_check_url)
-            monthlies = [c for c in opt_contracts if c["tradingClass"] == "SPX"]
-            if len(monthlies) > 0:
-                c = monthlies[0]
-                option_contract_map[curr_strike] = c["conid"]
-                expiration_set.add(c["maturityDate"])
-            curr_strike += 50.0
-
-        assert len(expiration_set) == 1
-        return list(expiration_set)[0], option_contract_map
-
 
     def _get_live_market_data(self, conids: list[str], fields: list[str]) -> dict:
         """
@@ -236,8 +198,65 @@ class IBKRSPXMarketData:
         return data
 
 
+    def _get_strikes_per_maturity(
+            self, spx_spot, maturity, option_type="call") -> dict[int, str]:
+        spx_low = spx_spot * (1 - IBKRSPXMarketData.DIST_FROM_SPOT)
+        spx_low = math.floor(spx_low / 100.0) * 100
+        spx_hi = spx_spot # (1 + IBKRSPXMarketData.DIST_FROM_SPOT)
+        spx_hi = math.ceil(spx_hi)
+        curr_strike = spx_low
+        option_contract_map = {}
+        expiration_set = set()
+        # Step 1. Validate option strike contracts
+        while curr_strike < spx_hi:
+            query_params = {
+                "conId": IBKRSPXMarketData.SPX_CON_ID,
+                "secType": "OPT",
+                "month": maturity,
+                "strike": curr_strike,
+                "right": "C" if option_type == "call" else "P"
+            }
+            query_string = urlencode(query_params)
+            strike_check_url = f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}?{query_string}"
+            opt_contracts = self._get_request(strike_check_url)
+            monthlies = [c for c in opt_contracts if c["tradingClass"] == "SPX"]
+            if len(monthlies) > 0:
+                c = monthlies[0]
+                option_contract_map[curr_strike] = c["conid"]
+                expiration_set.add(c["maturityDate"])
+            curr_strike += 50.0
+        assert len(expiration_set) == 1
+        return list(expiration_set)[0], option_contract_map
+
+
+    def _get_strike_contracts(self, spx_spot, option_type="call") -> dict[int, str]:
+        opt_contract_data = [x for x in self.spx_contract_data[0]["sections"]
+                             if x["secType"] == "OPT"]
+        opt_maturities = opt_contract_data[0]["months"].split(";")[1:4]
+        for m in opt_maturities:
+            query_params = {
+                "conId": IBKRSPXMarketData.SPX_CON_ID,
+                "secType": "OPT",
+                "month": m
+            }
+            query_string = urlencode(query_params)
+            strike_endpoint_url = f"{IBKRSPXMarketData.STRIKES_ENDPOINT}?{query_string}"
+            _ = self._get_request(strike_endpoint_url)
+        options_chain = {}
+        with ThreadPoolExecutor(max_workers=len(opt_maturities)) as executor:
+            results = executor.map(
+                self._get_strikes_per_maturity,
+                itertools.repeat(spx_spot),
+                list(opt_maturities),
+                itertools.repeat(option_type))
+            for i, r in enumerate(results):
+                options_chain[opt_maturities[i]] = r
+
+        return options_chain
+
+
     def spx_current_option_iv_surface(
-            self, option_type="call") -> list[tuple[float, str]]:
+            self, option_type="call") -> dict[str, list[tuple[float, str]]]:
         """
         Retrieves the IV smile from the closest monthly SPX options
         chain.
@@ -260,31 +279,38 @@ class IBKRSPXMarketData:
         vix_close = self._get_vix_spot()
         # Step 2. Query the set of strikes for the monthly option contracts
         #         of next month.
-        expiration, opt_contracts = self._get_strike_contracts(spx_close, opt_type)
+        options_chain = self._get_strike_contracts(spx_close, opt_type)
+        options_data = {}
         # Step 3. Retrieve option contract prices
-        conids = [str(x) for x in list(opt_contracts.values())]
-        conid_map = {value: key for (key, value) in opt_contracts.items()}
-        # Step 4. Retrieve each option implied volatility and then build a list
-        #         of pairs mapping strike -> IV% in strike ascending order.
-        retries = 3
-        while retries > 0:
-            try:
-                market_data = self._get_live_market_data(conids, ["7633"])
-                break
-            except Exception as e:
-                logging.warning("Error trying to load IV: %s", str(e))
-            finally:
-                retries -= 1
+        for _, chain in options_chain.items():
+            maturity_date = chain[0]
+            option_contracts = chain[1]
+            conid_map = {conid: strike for (strike, conid) in option_contracts.items()}
+            # Step 4. Retrieve each option implied volatility and then build a list
+            #         of pairs mapping strike -> IV% in strike ascending order.
+            retries = 3
+            while retries > 0:
+                try:
+                    market_data = self._get_live_market_data(
+                        [str(conid) for (_, conid) in option_contracts.items()],
+                        ["7633"])
+                    logging.debug("First IV value: %s", market_data[0]["7633"])
+                    break
+                except Exception as e:
+                    logging.warning("Error trying to load IV: %s", str(e))
+                finally:
+                    retries -= 1
 
-        iv_surface = {}
-        for market_row in market_data:
-            conid = market_row["conid"]
-            iv = market_row["7633"]
-            iv_surface[conid_map[conid]] = iv
-        sorted_strikes = list(iv_surface.keys())
-        sorted_strikes.sort()
-        sorted_ivs = [iv_surface[s] for s in sorted_strikes]
-        return spx_close, vix_close, expiration, list(zip(sorted_strikes, sorted_ivs))
+            iv_surface = {}
+            for market_row in market_data:
+                conid = market_row["conid"]
+                iv = market_row["7633"]
+                iv_surface[conid_map[conid]] = iv
+            sorted_strikes = list(iv_surface.keys())
+            sorted_strikes.sort()
+            sorted_ivs = [iv_surface[s] for s in sorted_strikes]
+            options_data[maturity_date] = list(zip(sorted_strikes, sorted_ivs))
+        return spx_close, vix_close, options_data
 
 
 def parse_args():
@@ -337,16 +363,16 @@ def main():
     if args.iv_surface:
         option_type = args.iv_surface.lower()
         if option_type not in ["call", "put"]:
-            logging.error(f"Invalid option type: '{option_type}'")
+            logging.error("Invalid option type: '%s'", option_type)
             sys.exit(1)
 
-        spx, vix, expiration, surface = \
+        spx, vix, options_chain = \
             ibkr.spx_current_option_iv_surface(option_type=option_type)
         with open(args.output_file, "w", encoding="utf-8") as f:
             json.dump({ "spot_spx": spx,
                         "spot_vix": vix,
-                        "expiration": expiration,
-                        "iv_surface": surface }, f)
+                        "opt_chain": options_chain
+                        }, f)
             return 0
 
     return 0
