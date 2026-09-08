@@ -2,3 +2,4 @@ __pycache__
 .obsidian
 .vscode
 .ipynb_checkpoints
+market_data.parquet

@@ -392,6 +392,11 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             monthly: float,
             day: int,
             tnotes: dict[int, list[tuple[int, float, float]]]):
+        # If there are no more tnotes, have enough money for a full
+        # year.
+        if len(tnotes) == 0:
+            return monthly * 12.0
+
         closest_maturity = min(m for _, (m, _, _) in tnotes.items())
         months_needed = math.ceil((closest_maturity - day) / 21.0)
         return monthly * months_needed

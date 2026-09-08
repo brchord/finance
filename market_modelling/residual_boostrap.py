@@ -55,15 +55,13 @@ class VARResidualBootstrapSimulator:
         design_components = [np.ones((effective_sample_size, 1))]
         for lag in range(1, p + 1):
             design_components.append(
-                increment_matrix[p - lag : total_observations - lag]
-            )
+                increment_matrix[p - lag : total_observations - lag])
         design_matrix = np.hstack(design_components)
 
         # OLS Solution
         self.coefficient_matrix = (
             np.linalg.pinv(design_matrix.T @ design_matrix)
-            @ (design_matrix.T @ target_matrix)
-        )
+            @ (design_matrix.T @ target_matrix))
         self.residual_matrix = target_matrix - (design_matrix @ self.coefficient_matrix)
         self.historical_seed_matrix = increment_matrix[-p:]
 
@@ -104,10 +102,8 @@ class VARResidualBootstrapSimulator:
 
         bootstrapped_residuals = np.zeros((num_paths, num_blocks * block_size, num_variables))
         for path_idx in range(num_paths):
-            sampled_blocks = [
-                self.residual_matrix[start : start + block_size]
-                for start in random_block_starts[path_idx]
-            ]
+            sampled_blocks = [self.residual_matrix[start : start + block_size]
+                              for start in random_block_starts[path_idx]]
             bootstrapped_residuals[path_idx] = np.vstack(sampled_blocks)
         bootstrapped_residuals = bootstrapped_residuals[:, :trading_days, :]
 
@@ -123,8 +119,7 @@ class VARResidualBootstrapSimulator:
 
             predicted_increments = (
                 current_design_matrix @ self.coefficient_matrix
-                + bootstrapped_residuals[:, step, :]
-            )
+                + bootstrapped_residuals[:, step, :])
             simulated_increments[:, step, :] = predicted_increments
 
             path_histories[:, :-1, :] = path_histories[:, 1:, :]
