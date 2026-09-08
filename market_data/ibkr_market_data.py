@@ -23,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from urllib.parse import urlencode
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 class IBKRSPXMarketData:
@@ -311,6 +313,39 @@ class IBKRSPXMarketData:
             sorted_ivs = [iv_surface[s] for s in sorted_strikes]
             options_data[maturity_date] = list(zip(sorted_strikes, sorted_ivs))
         return spx_close, vix_close, options_data
+
+    @classmethod
+    def load_iv_surface(cls, json_file):
+        """
+        Pulls multi month volatility surface data from the output
+        of market_data/spx_market_data.py
+        """
+        with open(json_file, encoding="utf-8") as f:
+            iv_surface = json.load(f)
+            # Convert IBKR IV string into a floating point number
+            # and separate the zipped time series (Strike, IV) into
+            # independent arrays.
+            surface_spot = iv_surface["spot_spx"]
+            surface_atm_iv = iv_surface["spot_vix"] / 100.0
+            today = date.today()
+            chain = iv_surface["opt_chain"]
+            surface_chain = {}
+            for exp_str in chain.keys():
+                exp_yr = int(exp_str[0:4])
+                exp_m = int(exp_str[4:6])
+                exp_d = int(exp_str[6:])
+                expiration = date(exp_yr, exp_m, exp_d)
+                surface_expiration = (expiration - today).days
+                surface_expiration *= 1.0/365.0
+                surface_data = chain[exp_str]
+                surface_strikes = np.zeros(len(surface_data))
+                surface_ivs = np.zeros(len(surface_data))
+                for i, pair in enumerate(surface_data):
+                    surface_strikes[i] = pair[0]
+                    iv = float(pair[1][:-1]) / 100.0
+                    surface_ivs[i] = iv
+                surface_chain[surface_expiration] = (surface_strikes, surface_ivs)
+            return surface_spot, surface_atm_iv, surface_chain
 
 
 def parse_args():

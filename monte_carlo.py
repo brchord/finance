@@ -8,8 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 from portfolio_models.linear_models import InvestmentStrategy
-from market_modelling.svcj import SVCJSimulation
-from market_modelling.dsvi import DynamicSVI
+from market_modelling.residual_boostrap import VARResidualBootstrapSimulator
 
 class MonteCarloEngine:
     """
@@ -22,16 +21,12 @@ class MonteCarloEngine:
 
     def __init__(self,
                  strategy: InvestmentStrategy,
-                 svi: DynamicSVI,
-                 start_spx: float,
-                 start_vix: float,
+                 simulator: VARResidualBootstrapSimulator,
                  days: int,
                  initial_nav: float,
                  base_seed: int):
         self.strategy = strategy
-        self.svi = svi
-        self.start_spx = start_spx
-        self.start_vix = start_vix
+        self.path_sim = simulator
         self.days = days
         self.initial_nav = initial_nav
         self.rng = np.random.default_rng(seed=base_seed)
@@ -40,9 +35,7 @@ class MonteCarloEngine:
     @staticmethod
     def _execute_strategy_batch(
         strategy: InvestmentStrategy,
-        svi: DynamicSVI,
-        start_spx: float,
-        start_vix: float,
+        path_simulator: VARResidualBootstrapSimulator,
         days: int,
         initial_nav: float,
         num_paths: int,
@@ -65,17 +58,15 @@ class MonteCarloEngine:
         returns_as_pct = np.empty(num_paths)
         max_drawdowns = np.empty(num_paths)
 
-        svcj = SVCJSimulation(start_spx, start_vix)
-        spx_paths, vix_paths, vix3m_paths = svcj.simulate_paths(
+        spx, yield3m, yield5y = path_simulator.simulate_paths(
             days, num_paths, seed)
 
         for i in range(num_paths):
             path_navs = strategy.run_simulation(
-                spot_spx=spx_paths[:, i],
-                spot_vix=vix_paths[:, i],
-                vix3m=vix3m_paths[:, i],
+                spx=spx[i, :],
+                yield3m=yield3m[i, :],
+                yield5y=yield5y[i, :],
                 initial_nav=initial_nav,
-                svi=svi,
                 days=days,
                 full_book=False)
 
@@ -116,9 +107,7 @@ class MonteCarloEngine:
                 executor.submit(
                     MonteCarloEngine._execute_strategy_batch,
                     self.strategy,
-                    self.svi,
-                    self.start_spx,
-                    self.start_vix,
+                    self.path_sim,
                     self.days,
                     self.initial_nav,
                     batch_size,

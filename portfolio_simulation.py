@@ -5,7 +5,6 @@ Entry point to run a full Monte Carlo Simulation for a
 given portfolio configuration specified in a JSON file.
 """
 import argparse
-import datetime
 import json
 import logging
 import sys
@@ -14,35 +13,29 @@ import os
 
 import numpy as np
 
+import market_data.yf_fred_market_data as md
 import monte_carlo as mc
 import portfolio_models.linear_models as lm
 
-from market_modelling.dsvi import DynamicSVI
-from market_modelling.svcj import SVCJSimulation
+from market_modelling.residual_boostrap import VARResidualBootstrapSimulator
 
 logger = logging.getLogger(__name__)
 
 def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     "Run a single path simulation and record all transactions."
     logging.info("Executing single path simulation with full book data")
-    spot_spx = config["spx"]
-    spot_vix = config["vix"]
-    num_days = config["days"]
-
-    logging.info("SVCJ parameters: [Spot SPX: %.2f, Spot VIX: %.2f, Days: %d]",
-            spot_spx, spot_vix, num_days)
-
-    svcj = SVCJSimulation(spot_spx, spot_vix)
+    sim: VARResidualBootstrapSimulator = config["sim"]
     if "seed" in config:
-        spx, vix, vix3m = svcj.simulate_paths(num_days, 1, config["seed"])
+        spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
+            config["days"], 1, config["seed"])
     else:
-        spx, vix, vix3m = svcj.simulate_paths(num_days, 1)
+        spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
+            config["days"], 1)
 
     spot_nav = portfolio.run_simulation(
-        spot_spx=spx[:, 0],
-        spot_vix=vix[:, 0],
-        vix3m=vix3m[:, 0],
-        svi=config["svi"],
+        spx=spx_path[0, :],
+        yield3m=yield3m_path[0, :],
+        yield5y=yield5y_path[0, :],
         initial_nav=config["nav"],
         days=config["days"],
         full_book=True)
@@ -51,84 +44,13 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
 
     output = {
         "nav_path": spot_nav.tolist(),
-        "spx": spx.tolist(),
-        "vix": vix.tolist(),
-        "vix3m": vix3m.tolist(),
+        "spx": spx_path.tolist(),
+        "yield3m": yield3m_path.tolist(),
+        "yield5m": yield5y_path.tolist(),
         "transactions": transactions
     }
 
     return output
-
-
-def run_backtest(config: dict, portfolio: lm.CombinedPortfolioStrategy):
-    "Run a single path using historical data and record all transaction data."
-    logging.info("Executing single path using historical data for "
-                 "backtesting purposes.")
-    with open(config["json"], encoding="utf-8") as f:
-        raw_data = json.load(f)
-        # Extract the time series data and only take closing values for each
-        # candle.  Also pair up candles and use each candle time signature
-        # to stitch together the VIX and SPX.
-        spx_data = raw_data["spx"]
-        vix_data = raw_data["vix"]
-        vix3m_data = raw_data["vix3m"]
-
-        def clean_time_series(price_data):
-            data_dict = {}
-            for c in price_data:
-                t = c["t"]
-                d = datetime.datetime.fromtimestamp(t / 1000)
-                date_str = f"{d.year}{d.month:02d}{d.day:02d}"
-                data_dict[date_str] = c["c"]
-            return data_dict
-
-        spx_dict = clean_time_series(spx_data["data"])
-        vix_dict = clean_time_series(vix_data["data"])
-        vix3m_dict = clean_time_series(vix3m_data["data"])
-
-        final_set = set(spx_dict.keys()).intersection(
-            set(vix_dict.keys()).intersection(set(vix3m_dict.keys())))
-        sorted_days = list(final_set)
-        sorted_days.sort()
-
-        spx_final = []
-        vix_final = []
-        vix3m_final = []
-        for d in sorted_days:
-            spx_final.append(float(spx_dict[d]))
-            vix_final.append(float(vix_dict[d]) / 100.0)
-            vix3m_final.append(float(vix3m_dict[d]) / 100.0)
-
-        assert len(spx_final) == len(vix_final)
-        assert len(vix_final) == len(vix3m_final)
-
-        days = config["days"]
-        if len(spx_final) < days:
-            raise ValueError(
-                "Not enough backtest data in SPX/VIX/VIX3M to run a "
-                f"{days} days simulation. Data has {len(spx_final)} "
-                "points.")
-
-        spot_nav = portfolio.run_simulation(
-            spot_spx=spx_final,
-            spot_vix=vix_final,
-            vix3m=vix3m_final,
-            svi=config["svi"],
-            initial_nav=config["nav"],
-            days=config["days"],
-            full_book=True)
-
-        transactions = portfolio.transaction_book()
-
-        output = {
-            "nav_path": spot_nav.tolist(),
-            "spx": spx_final,
-            "vix": vix_final,
-            "vix3m": vix3m_final,
-            "transactions": transactions
-        }
-
-        return output
 
 
 def parse_args():
@@ -144,12 +66,6 @@ def parse_args():
     construct a portfolio under analysis.
     """
     parser = argparse.ArgumentParser(description=prog_description)
-    parser.add_argument("-e", "--iv-surface",
-                        help="Import a JSON file that represents real market "
-                             "volatility surface data, for the file format, go to "
-                             "the examples subdir in this project.",
-                        dest="iv_surface_json",
-                        required=True)
     parser.add_argument("-p", "--portfolio-config",
                         help="JSON file specifying the portfolio architecture "
                              "to be analyzed.  The examples subdirectory explains "
@@ -183,12 +99,6 @@ def parse_args():
                         type=int,
                         default=10000,
                         dest="num_paths")
-    parser.add_argument("-b", "--backtest",
-                        help="Performs a backtest against market data specified by "
-                             "the given JSON file enabling full trading book data for "
-                             "further analysis. See the examples subdir for its "
-                             "structure",
-                        dest="backtest_json")
     core_count = os.cpu_count()
     parser.add_argument("-j", "--concurrency",
                         help="Specifies the amount of concurrency to run the simulation "
@@ -207,39 +117,11 @@ def parse_args():
                         help="Logging level: DEBUG | INFO | WARNING | ERROR",
                         dest="log_level",
                         default="INFO")
+    parser.add_argument("-c", "--data-cache",
+                        help="Filename to persist cached market data",
+                        dest="data_cache",
+                        default="market_data.parquet")
     return parser.parse_args()
-
-def load_iv_surface(json_file):
-    """
-    Pulls multi month volatility surface data from the output
-    of market_data/spx_market_data.py
-    """
-    with open(json_file, encoding="utf-8") as f:
-        iv_surface = json.load(f)
-        # Convert IBKR IV string into a floating point number
-        # and separate the zipped time series (Strike, IV) into
-        # independent arrays.
-        surface_spot = iv_surface["spot_spx"]
-        surface_atm_iv = iv_surface["spot_vix"] / 100.0
-        today = datetime.date.today()
-        chain = iv_surface["opt_chain"]
-        surface_chain = {}
-        for exp_str in chain.keys():
-            exp_yr = int(exp_str[0:4])
-            exp_m = int(exp_str[4:6])
-            exp_d = int(exp_str[6:])
-            expiration = datetime.date(exp_yr, exp_m, exp_d)
-            surface_expiration = (expiration - today).days
-            surface_expiration *= 1.0/365.0
-            surface_data = chain[exp_str]
-            surface_strikes = np.zeros(len(surface_data))
-            surface_ivs = np.zeros(len(surface_data))
-            for i, pair in enumerate(surface_data):
-                surface_strikes[i] = pair[0]
-                iv = float(pair[1][:-1]) / 100.0
-                surface_ivs[i] = iv
-            surface_chain[surface_expiration] = (surface_strikes, surface_ivs)
-        return surface_spot, surface_atm_iv, surface_chain
 
 
 def main():
@@ -264,47 +146,55 @@ def main():
     logging.info("Starting Portfolio Simulation CLI tool.")
 
     log_msg = f"""Parameters for the simulation:
-              IV Surface File: {args.iv_surface_json}
         Portfolio Config File: {args.portfolio_json}
                   Random Seed: {"Not specified" if args.rng_seed
                                 is None else args.rng_seed }
             Paths to simulate: {args.num_paths:,}
-                Backtest data: {"Not specified" if args.backtest_json
-                                is None else args.backtest_json}
                   Concurrency: {args.concurrency}
        Single path simulation: {args.single_path}"""
     logging.info(log_msg)
 
     # Start the timer
     init_start_time = time.perf_counter()
-    ivs_json = args.iv_surface_json
     p_json = args.portfolio_json
 
-    logging.info("Attempting to load IV surface data from %s", ivs_json)
-
-    spot, atm_iv, surface_chain = load_iv_surface(ivs_json)
-    closest_exp = min(surface_chain.keys())
-    strikes = surface_chain[closest_exp][0]
-    ivs = surface_chain[closest_exp][1]
-    svi = DynamicSVI(strikes, ivs, spot, closest_exp)
-    logging.info("Successfully loaded IV surface volatility data.")
     logging.info("Loading portfolio geometry...")
     portfolio = None
 
     with open(p_json, encoding="utf-8") as f:
         json_object = json.load(f)
-        portfolio = lm.CombinedPortfolioStrategy.from_json_object(json_object)
+        for strategy in [lm.CombinedPortfolioStrategy,
+                         lm.LongSPYStrategy,
+                         lm.LongSPYWithTreasuryLadders,
+                         lm.FixedIncomeStrategy]:
+            portfolio = strategy.from_json_object(json_object)
+            if portfolio is not None:
+                break
+        if portfolio is None:
+            raise ValueError("Invalid portfolio specification "
+                             f"from file: {p_json}")
+
+    data_manager = md.MarketDataManager(cache_filepath=args.data_cache)
+    market_levels, market_returns = data_manager.get_aligned_data(force_refresh=False)
+
+    logging.info("Successfully loaded portfolio architecture")
+
+    latest_row = market_levels.iloc[-1]
+    last_spx = latest_row["spx_close"]
+    last_yield3m = latest_row["yield_3m"]
+    last_yield5y = latest_row["yield_5y"]
+
+    simulator = VARResidualBootstrapSimulator(
+        last_spx, last_yield3m, last_yield5y,
+        lag_order=2, residual_block_size=21)
+    simulator.fit(returns_data=market_returns, levels_data=market_levels)
 
     config = {
         "nav": args.initial_nav,
         "conc": args.concurrency,
-        "spx": spot,
-        "vix": atm_iv,
         "days": args.days,
-        "svi": svi
+        "sim": simulator
     }
-
-    logging.info("Successfully loaded portfolio architecture")
 
     init_end_time = time.perf_counter()
     init_execution_time = init_end_time - init_start_time
@@ -321,32 +211,17 @@ def main():
         sp_exec_time = sp_end - sp_start
         logging.info("Single path simulation took: %.2f ms", sp_exec_time)
 
-    if args.backtest_json:
-        config["json"] = args.backtest_json
-        backtest_start = time.perf_counter()
-        single_path_data = run_backtest(config, portfolio)
-        backtest_end = time.perf_counter()
-        backtest_time = backtest_end - backtest_start
-        logging.info("Backtest path simulation took: %.2f ms", backtest_time)
-
     if single_path_data is not None:
         with open(args.output_file, 'w', encoding="utf-8") as f:
             json.dump(single_path_data, f)
             return 0
 
     logging.info("Orchestrating Monte Carlo Simulation...")
-    seed = 0
+    seed = np.random.default_rng().random()
     if args.rng_seed is not None:
         seed = args.rng_seed
 
-    mcs = mc.MonteCarloEngine(
-        portfolio,
-        svi,
-        spot,
-        atm_iv,
-        args.days,
-        args.initial_nav,
-        seed)
+    mcs = mc.MonteCarloEngine(portfolio, simulator, args.days, args.initial_nav, seed)
 
     mc_start = time.perf_counter()
     navs, returns, returns_pct, max_dds = mcs.run(
