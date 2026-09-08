@@ -34,11 +34,11 @@ class SVCJSimulation:
         kappa: float = 4.0,
         theta: float = 0.0324,
         sigma_v: float = 0.30,
-        rho: float = -0.75,
+        rho: float = -0.85,
         lambda_j: float = 1.5,
-        mu_v: float = 0.03,
-        mu_y: float = -0.05,
-        sigma_y: float = 0.04,
+        mu_v: float = 0.035,
+        mu_y: float = -0.08,
+        sigma_y: float = 0.045,
         rho_j: float = -1.0,
         variance_risk_premium: float = 1.2
     ):

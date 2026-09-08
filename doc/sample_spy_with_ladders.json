@@ -4,9 +4,9 @@
         {
             "portfolio": {
                 "type": "LongSPYWithTreasuryLadders",
-                "equity_allocation": 0.85,
-                "ladder_allocation": 0.15,
-                "yearly_spending": 285000,
+                "equity_allocation": 0.75,
+                "ladder_allocation": 0.25,
+                "yearly_spending": 175000,
                 "monthly_tbill_rate": 0.038,
                 "average_tnote_rate": 0.042,
                 "dividend_yield": 0.01,

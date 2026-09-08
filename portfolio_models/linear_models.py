@@ -475,6 +475,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             day_num = d + 1
             day_spy = spot_spx[d]
             transaction_day = False
+            assert spy_position_size >= 0
 
             # Account for monthly withdrawals
             if day_num % 21 == 0:
@@ -490,15 +491,16 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             # Account for SPY dividend distribution
             if day_num % 63 == 0:
                 cash_dividend = spy_position_size * day_spy * self.spy_div_yield / 4.0
-                cash += cash_dividend
-                if full_book:
-                    self.book.append({
-                        "day": d,
-                        "trade": "dividend",
-                        "price": cash_dividend,
-                        "description": "SPY dividend payment"
-                    })
-                    transaction_day = True
+                if cash_dividend > 0:
+                    cash += cash_dividend
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "dividend",
+                            "price": cash_dividend,
+                            "description": "SPY dividend payment"
+                        })
+                        transaction_day = True
 
             cash *= 1 + tbill_daily_rate
 
@@ -546,19 +548,21 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                     needed_amount = current_nav * self.ladder_allocation \
                          - fixed_income_position
                     selling_position = math.ceil(needed_amount / day_spy)
-                    if full_book:
-                        self.book.append({
-                            "day": d,
-                            "trade": "sell",
-                            "symbol": "SPY",
-                            "size": selling_position,
-                            "price": day_spy,
-                            "description": "Portfolio rebalance to replenish "
-                                           "fixed income"
-                        })
-                        transaction_day = True
-                    spy_position_size -= selling_position
-                    cash += selling_position * day_spy
+                    selling_position = min(selling_position, spy_position_size)
+                    if selling_position > 0:
+                        if full_book:
+                            self.book.append({
+                                "day": d,
+                                "trade": "sell",
+                                "symbol": "SPY",
+                                "size": selling_position,
+                                "price": day_spy,
+                                "description": "Portfolio rebalance to replenish "
+                                               "fixed income"
+                            })
+                            transaction_day = True
+                        spy_position_size -= selling_position
+                        cash += selling_position * day_spy
 
             # If the liquid cash reserves fall below 6 months of runway, liquidate
             # equity to fund in case of an emergency
@@ -569,17 +573,19 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             current_runway = cash - (six_month_needs - expected_dividends)
             if current_runway < 0:
                 selling_position = math.ceil(-current_runway / day_spy)
-                if full_book:
-                    self.book.append({
-                        "day": d,
-                        "trade": "sell",
-                        "price": day_spy,
-                        "size": selling_position,
-                        "description": "Selling shares to cover 6 months of runway"
-                    })
-                    transaction_day = True
-                spy_position_size -= selling_position
-                cash += selling_position * day_spy
+                selling_position = min(selling_position, spy_position_size)
+                if selling_position > 0:
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "sell",
+                            "price": day_spy,
+                            "size": selling_position,
+                            "description": "Selling shares to cover 6 months of runway"
+                        })
+                        transaction_day = True
+                    spy_position_size -= selling_position
+                    cash += selling_position * day_spy
 
             # If we have too much cash sitting, it's important to move it to the
             # T-Note ladder, check monthly to simulate monthly auctioning.
@@ -595,23 +601,25 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                             break
                 assert tnote_maturity > 0
                 tnote_tranche = current_nav * self.ladder_allocation / 5
-                if full_book:
-                    self.book.append({
-                        "day": d,
-                        "trade": "buy",
-                        "symbol": f"T-Note {int(tnote_maturity / 252)} Years",
-                        "price": tnote_tranche,
-                        "rate": self.tnote_rate,
-                        "description": "T-Note ladder replenish"
-                    })
-                    transaction_day = True
-                tnotes[tnote_id] = (d + tnote_maturity, tnote_tranche)
-                tnote_id += 1
-                cash -= tnote_tranche
+                if cash >= tnote_tranche + six_month_needs and tnote_tranche > 0:
+                    if full_book:
+                        self.book.append({
+                            "day": d,
+                            "trade": "buy",
+                            "symbol": f"T-Note {int(tnote_maturity / 252)} Years",
+                            "price": tnote_tranche,
+                            "rate": self.tnote_rate,
+                            "description": "T-Note ladder replenish"
+                        })
+                        transaction_day = True
+                    tnotes[tnote_id] = (d + tnote_maturity, tnote_tranche)
+                    tnote_id += 1
+                    cash -= tnote_tranche
 
             # Adjust monthly withdrawals for inflation each year
             if day_num % 252 == 0:
                 monthly_withdrawal *= 1 + self.inflation
+                self.yearly_spending = monthly_withdrawal * 12
 
             # Mark to market all positions
             if full_book and transaction_day:
