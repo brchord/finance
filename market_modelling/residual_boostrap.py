@@ -14,12 +14,7 @@ class VARResidualBootstrapSimulator:
     Conforms to API specification for multi-asset 3-fold path generation.
     """
 
-    def __init__(self,
-                 initial_spx: float,
-                 initial_yield3m: float,
-                 initial_yield5y: float,
-                 lag_order: int = 2,
-                 residual_block_size: int = 21):
+    def __init__(self, lag_order: int = 2, residual_block_size: int = 21):
         """
         Parameters:
         - lag_order: Order p for VAR(p) estimation (default: 2 daily lags).
@@ -27,9 +22,9 @@ class VARResidualBootstrapSimulator:
           21 daily trading steps ~ 1 month).
         """
         # Initial level state anchors
-        self.initial_spx_level = initial_spx
-        self.initial_yield_3m = initial_yield3m
-        self.initial_yield_5y = initial_yield5y
+        self.initial_spx_level: float | None = None
+        self.initial_yield_3m: float | None = None
+        self.initial_yield_5y: float | None = None
 
         self.lag_order = lag_order
         self.residual_block_size = residual_block_size
@@ -86,7 +81,9 @@ class VARResidualBootstrapSimulator:
             raise RuntimeError("Model is not fitted. Call fit() before simulating paths.")
 
         if seed is not None:
-            np.random.seed(seed)
+            self.rng = np.random.default_rng(seed)
+        else:
+            self.rng = np.random.default_rng()
 
         effective_sample_size, num_variables = self.residual_matrix.shape
         p = self.lag_order
@@ -96,9 +93,8 @@ class VARResidualBootstrapSimulator:
         num_blocks = int(np.ceil(trading_days / block_size))
         max_start_index = effective_sample_size - block_size
 
-        random_block_starts = np.random.randint(
-            0, max_start_index + 1, size=(num_paths, num_blocks)
-        )
+        random_block_starts = self.rng.integers(
+            0, max_start_index + 1, size=(num_paths, num_blocks))
 
         bootstrapped_residuals = np.zeros((num_paths, num_blocks * block_size, num_variables))
         for path_idx in range(num_paths):

@@ -1,18 +1,8 @@
 {
-    "type": "CombinedPortfolioStrategy",
-    "components": [
-        {
-            "portfolio": {
-                "type": "LongSPYWithTreasuryLadders",
-                "equity_allocation": 0.75,
-                "ladder_allocation": 0.25,
-                "yearly_spending": 175000,
-                "monthly_tbill_rate": 0.038,
-                "average_tnote_rate": 0.042,
-                "dividend_yield": 0.01,
-                "average_inflation": 0.034
-            },
-            "weight": 1.0
-        }
-    ]
+    "type": "LongSPYWithTreasuryLadders",
+    "equity_allocation": 0.90,
+    "ladder_allocation": 0.10,
+    "yearly_spending": 250000,
+    "dividend_yield": 0.01,
+    "average_inflation": 0.034
 }

@@ -53,6 +53,7 @@ class MonteCarloEngine:
         3. Annualized return.
         4. Max drawdown.
         """
+        final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
         total_returns = np.empty(num_paths)
         returns_as_pct = np.empty(num_paths)
@@ -70,6 +71,7 @@ class MonteCarloEngine:
                 days=days,
                 full_book=False)
 
+            final_spx[i] = spx[i, -1]
             final_navs[i] = path_navs[-1]
             total_returns[i] = (path_navs[-1] - initial_nav) / initial_nav
             returns_as_pct[i] = path_navs[-1] / initial_nav
@@ -77,7 +79,7 @@ class MonteCarloEngine:
             drawdowns = (peak - path_navs) / peak
             max_drawdowns[i] = -np.max(drawdowns)
 
-        return final_navs, total_returns, returns_as_pct, max_drawdowns
+        return final_spx, final_navs, total_returns, returns_as_pct, max_drawdowns
 
 
     def run(
@@ -97,6 +99,7 @@ class MonteCarloEngine:
             chunks.append(current_batch_size)
             remaining_paths -= current_batch_size
 
+        all_final_spx = []
         all_final_navs = []
         all_final_returns = []
         all_final_pct_of_nav = []
@@ -116,13 +119,15 @@ class MonteCarloEngine:
                 for batch_size in chunks
             ]
             for future in as_completed(futures):
-                f_navs, returns, pct_returns, m_dds = future.result()
+                f_spx, f_navs, returns, pct_returns, m_dds = future.result()
+                all_final_spx.append(f_spx)
                 all_final_navs.append(f_navs)
                 all_final_returns.append(returns)
                 all_final_pct_of_nav.append(pct_returns)
                 all_max_drawdowns.append(m_dds)
 
-        return np.concatenate(all_final_navs), \
+        return np.concatenate(all_final_spx), \
+            np.concatenate(all_final_navs), \
             np.concatenate(all_final_returns), \
             np.concatenate(all_final_pct_of_nav), \
             np.concatenate(all_max_drawdowns)

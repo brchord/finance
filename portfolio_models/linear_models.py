@@ -100,6 +100,7 @@ class FixedIncomeStrategy(InvestmentStrategy):
         """Run portfolio simulation (see parent's class docstring)."""
         daily_rate = self.rate / 252.0
         monthly_rate = self.rate / 12.0
+        self.book.clear()
         path = np.zeros(days)
         current_nav = initial_nav
         for d in range(0, days):
@@ -180,6 +181,7 @@ class LongSPYStrategy(InvestmentStrategy):
         days: int,                    # Days to run the simulation
         full_book=False) -> np.array: # Track full options book for debugging.
         """Run portfolio simulation (see parent's class docstring)."""
+        self.book.clear()
         shares = initial_nav / (spx[0] / 10.0)
         quarterly_yield = self.avg_yield / 4.0
 
@@ -304,6 +306,7 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         """Run portfolio simulation (see parent's class docstring)."""
         total_weight = 0.0
         result = np.zeros(days)
+        self.book.clear()
         books = []
 
         for portfolio, weight in self.components:
@@ -403,6 +406,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
 
 
     def run_simulation(self, *, spx, yield3m, yield5y, initial_nav, days, full_book=False):
+        self.book.clear()
         monthly_withdrawal = self.yearly_spending / 12
         current_nav = initial_nav
         spx = spx / 10.0
@@ -590,7 +594,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                             "trade": "sell",
                             "price": day_spy,
                             "size": selling_position,
-                            "description": "Selling shares to cover 6 months of runway"
+                            "description": "Selling shares to cover a year of runway"
                         })
                         transaction_day = True
                     spy_position_size -= selling_position
@@ -628,7 +632,6 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             # Adjust monthly withdrawals for inflation each year
             if day_num % 252 == 0:
                 monthly_withdrawal *= 1 + self.inflation
-                self.yearly_spending = monthly_withdrawal * 12
 
             # Mark to market all positions
             if full_book and transaction_day:

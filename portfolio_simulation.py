@@ -27,7 +27,7 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     sim: VARResidualBootstrapSimulator = config["sim"]
     if "seed" in config:
         spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
-            config["days"], 1, config["seed"])
+            config["days"], 1000, config["seed"])
     else:
         spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
             config["days"], 1)
@@ -44,9 +44,9 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
 
     output = {
         "nav_path": spot_nav.tolist(),
-        "spx": spx_path.tolist(),
-        "yield3m": yield3m_path.tolist(),
-        "yield5m": yield5y_path.tolist(),
+        "spx": spx_path[0, :].tolist(),
+        "yield3m": yield3m_path[0, :].tolist(),
+        "yield5m": yield5y_path[0, :].tolist(),
         "transactions": transactions
     }
 
@@ -179,14 +179,7 @@ def main():
 
     logging.info("Successfully loaded portfolio architecture")
 
-    latest_row = market_levels.iloc[-1]
-    last_spx = latest_row["spx_close"]
-    last_yield3m = latest_row["yield_3m"]
-    last_yield5y = latest_row["yield_5y"]
-
-    simulator = VARResidualBootstrapSimulator(
-        last_spx, last_yield3m, last_yield5y,
-        lag_order=2, residual_block_size=21)
+    simulator = VARResidualBootstrapSimulator()
     simulator.fit(returns_data=market_returns, levels_data=market_levels)
 
     config = {
@@ -224,17 +217,17 @@ def main():
     mcs = mc.MonteCarloEngine(portfolio, simulator, args.days, args.initial_nav, seed)
 
     mc_start = time.perf_counter()
-    navs, returns, returns_pct, max_dds = mcs.run(
+    spxs, navs, returns, returns_pct, max_dds = mcs.run(
         total_paths=args.num_paths, n_workers=config["conc"])
     mc_end = time.perf_counter()
     total_time = float(mc_end - mc_start)
     logging.info("Monte Carlo simulation completed.  Took: %2fs", total_time)
     with open(args.output_file, "w", encoding=" utf-8") as f:
-        print('"Terminal NAV", "Total Return", "Pct of Initial NAV", "Max Drawdown"',
-              file=f)
+        print('"Terminal SPX", "Terminal NAV", "Total Return", '
+              '"Pct of Initial NAV", "Max Drawdown"', file=f)
         for i, nav in enumerate(navs):
-            output_row = f"{nav:.2f}, {returns[i]:.2f}, " + \
-                         f"{returns_pct[i]:.2f}, {max_dds[i]:,.2f}"
+            output_row = f"{spxs[i]:.2f}, {nav:.2f}, {returns[i]:.2f}, " + \
+                         f"{returns_pct[i]:.2f}, {max_dds[i]:.2f}"
             print(output_row, file=f)
 
     return 0

@@ -67,8 +67,10 @@ class MarketDataManager:
         Loads cached market levels or fetches incremental updates if local cache is stale.
         """
         today = pd.Timestamp(datetime.date.today())
+        save_file = False
 
         if not self.cache_filepath.exists() or force_refresh:
+            save_file = True
             market_levels = self._fetch_remote_data(
                 start_date=self.historical_floor_date, end_date=today)
         else:
@@ -76,6 +78,7 @@ class MarketDataManager:
             max_cached_date = cached_levels.index.max()
 
             if self.auto_update and max_cached_date < (today - pd.Timedelta(days=1)):
+                save_file = True
                 incremental_start_date = max_cached_date - pd.Timedelta(days=5)
                 new_levels = self._fetch_remote_data(
                     start_date=incremental_start_date, end_date=today)
@@ -87,7 +90,8 @@ class MarketDataManager:
                 market_levels = cached_levels
 
         market_levels = market_levels.ffill().dropna()
-        market_levels.to_parquet(self.cache_filepath)
+        if save_file:
+            market_levels.to_parquet(self.cache_filepath)
 
         return market_levels
 
