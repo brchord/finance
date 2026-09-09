@@ -17,7 +17,7 @@ import market_data.yf_fred_market_data as md
 import monte_carlo as mc
 import portfolio_models.linear_models as lm
 
-from market_modelling.residual_boostrap import VARResidualBootstrapSimulator
+from market_modelling.path_simulation import VARResidualBootstrapSimulator
 
 logger = logging.getLogger(__name__)
 

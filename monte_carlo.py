@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 from portfolio_models.linear_models import InvestmentStrategy
-from market_modelling.residual_boostrap import VARResidualBootstrapSimulator
+from market_modelling.path_simulation import VARResidualBootstrapSimulator
 
 class MonteCarloEngine:
     """

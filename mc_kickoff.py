@@ -11,7 +11,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from market_modelling.residual_boostrap import VARResidualBootstrapSimulator
+from market_modelling.path_simulation import HybridValuationVARSimulator
 from monte_carlo import MonteCarloEngine
 from market_data.yf_fred_market_data import MarketDataManager
 from portfolio_models.linear_models import LongSPYWithTreasuryLadders
@@ -26,18 +26,17 @@ portfolio_config = {
 }
 
 allocations = [
-    (0.6, 0.4),
-    (0.7, 0.3),
-    (0.8, 0.2),
-    (0.9, 0.1)
+    (0.85, 0.15),
+    (0.9, 0.1),
+    (0.95, 0.05),
 ]
 
 spendings = [
     150_000,
-    200_000,
-    250_000,
-    300_000,
-    350_000
+    155_000,
+    160_000,
+    165_000,
+    170_000
 ]
 
 def main():
@@ -49,7 +48,7 @@ def main():
     perf_counters["simulation"] = []
     perf_counters["data_storage"] = []
 
-    rng = np.random.default_rng(250722)
+    rng = np.random.default_rng()
 
     for a in allocations:
         for s in spendings:
@@ -59,7 +58,7 @@ def main():
 
             setup_start = time.perf_counter()
 
-            simulator = VARResidualBootstrapSimulator()
+            simulator = HybridValuationVARSimulator()
             simulator.fit(returns, levels)
 
             strategy = LongSPYWithTreasuryLadders.from_json_object(portfolio_config)
@@ -70,7 +69,7 @@ def main():
             perf_counters["setup"].append(setup_end - setup_start)
 
             sim_start = time.perf_counter()
-            spx, nav, rets, pct, dds = mc.run(total_paths=30000, n_workers=18)
+            spx, nav, rets, pct, dds = mc.run(total_paths=5000, n_workers=20)
             sim_end = time.perf_counter()
 
             perf_counters["simulation"].append(sim_end - sim_start)
