@@ -27,7 +27,7 @@ def run_single_path(config: dict, portfolio: lm.CombinedPortfolioStrategy):
     sim: VARResidualBootstrapSimulator = config["sim"]
     if "seed" in config:
         spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
-            config["days"], 1000, config["seed"])
+            config["days"], 1, config["seed"])
     else:
         spx_path, yield3m_path, yield5y_path = sim.simulate_paths(
             config["days"], 1)

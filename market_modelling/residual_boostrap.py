@@ -32,6 +32,7 @@ class VARResidualBootstrapSimulator:
         self.residual_matrix: np.ndarray | None = None
         self.num_variables: int | None = None
         self.historical_seed_matrix: np.ndarray | None = None
+        self.rng: np.random.Generator | None = None
 
 
     def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
