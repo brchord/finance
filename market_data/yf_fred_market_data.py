@@ -1,9 +1,9 @@
 """
 yf_fred_market_data.py
 
-Retrieves Yahoo Finance SPX time series and FRED treasury yields
-to store it into local storage for Monte Carlo path synthesis using
-VAR Filtered Block Boostrap.
+Retrieves Yahoo Finance SPX time series and FRED treasury yields/CPI
+to store into local storage and compute real-space monthly return vectors 
+for 3D VAR residual bootstrapping.
 """
 
 import datetime
@@ -15,12 +15,12 @@ import yfinance as yf
 
 class MarketDataManager:
     """
-    Handles local Parquet persistence and incremental fetching for daily S&P 500 
-    prices and FRED constant maturity yields (3M Bill, 5Y Note).
+    Handles local Parquet persistence and incremental fetching for monthly 
+    S&P 500 prices, FRED yields, and CPI data to compute upstream real returns.
     """
 
     def __init__(self,
-                 auto_update = False,
+                 auto_update: bool = False,
                  cache_filepath: str = "market_levels_cache.parquet",
                  historical_floor_date: str = "1982-01-01"):
         self.auto_update = auto_update
@@ -31,7 +31,7 @@ class MarketDataManager:
                            start_date: pd.Timestamp,
                            end_date: pd.Timestamp) -> pd.DataFrame:
         """
-        Queries Yahoo Finance and FRED endpoints for a specified date range.
+        Queries Yahoo Finance and FRED endpoints (Yields + CPI) for a specified date range.
         """
         start_str = start_date.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")
@@ -43,23 +43,24 @@ class MarketDataManager:
             spx_raw = spx_raw["^GSPC"]
         spx_series = spx_raw.rename("spx_close")
 
-        # 2. Fetch FRED Constant Maturity Yields
+        # 2. Fetch FRED Series: Yields (Daily) & CPI (Monthly)
         fred_3m_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO"
         fred_5y_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS5"
+        fred_cpi_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
 
         tbill_raw = pd.read_csv(
             fred_3m_url, parse_dates=["observation_date"], index_col="observation_date")
         tnote_raw = pd.read_csv(
             fred_5y_url, parse_dates=["observation_date"], index_col="observation_date")
+        cpi_raw = pd.read_csv(
+            fred_cpi_url, parse_dates=["observation_date"], index_col="observation_date")
 
-        yield_3m_series = pd.to_numeric(tbill_raw["DGS3MO"], errors="coerce").rename("yield_3m")
-        yield_3m_series /= 100.0
-        yield_5y_series = pd.to_numeric(tnote_raw["DGS5"], errors="coerce").rename("yield_5y")
-        yield_5y_series /= 100.0
+        yield_3m_series = pd.to_numeric(tbill_raw["DGS3MO"], errors="coerce").rename("yield_3m") / 100.0
+        yield_5y_series = pd.to_numeric(tnote_raw["DGS5"], errors="coerce").rename("yield_5y") / 100.0
+        cpi_series = pd.to_numeric(cpi_raw["CPIAUCSL"], errors="coerce").rename("cpi")
 
-        # 3. Combine raw fetched series
-        remote_levels = pd.concat([spx_series, yield_3m_series, yield_5y_series],
-                                  axis=1)
+        # Combine raw fetched daily levels (CPI will be monthly points filled forward initially)
+        remote_levels = pd.concat([spx_series, yield_3m_series, yield_5y_series, cpi_series], axis=1)
         return remote_levels.loc[start_date:end_date]
 
     def load_or_update_market_levels(self, force_refresh: bool = False) -> pd.DataFrame:
@@ -79,7 +80,7 @@ class MarketDataManager:
 
             if self.auto_update and max_cached_date < (today - pd.Timedelta(days=1)):
                 save_file = True
-                incremental_start_date = max_cached_date - pd.Timedelta(days=5)
+                incremental_start_date = max_cached_date - pd.Timedelta(days=10)
                 new_levels = self._fetch_remote_data(
                     start_date=incremental_start_date, end_date=today)
 
@@ -95,19 +96,44 @@ class MarketDataManager:
 
         return market_levels
 
-    def get_aligned_data(
-            self,
-            force_refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def get_aligned_real_returns(self, force_refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Returns synchronized market levels alongside daily stationary increments.
+        Resamples market levels to monthly frequency and computes 3D real monthly returns:
+        [r_spx_real, r_3m_real, r_5y_real].
         """
-        market_levels = self.load_or_update_market_levels(force_refresh=force_refresh)
+        raw_levels = self.load_or_update_market_levels(force_refresh=force_refresh)
 
-        market_returns = pd.DataFrame(index=market_levels.index[1:])
-        market_returns["spx_log_return"] = np.log(
-            market_levels["spx_close"] / market_levels["spx_close"].shift(1))
-        market_returns["yield_3m_diff"] = market_levels["yield_3m"].diff()
-        market_returns["yield_5y_diff"] = market_levels["yield_5y"].diff()
-        market_returns = market_returns.dropna()
+        # 1. Resample to Month-End frequency to align Daily Financial Data with Monthly CPI
+        monthly_levels = pd.DataFrame()
+        monthly_levels["spx_close"] = raw_levels["spx_close"].resample("ME").last()
+        monthly_levels["yield_3m"] = raw_levels["yield_3m"].resample("ME").last()
+        monthly_levels["yield_5y"] = raw_levels["yield_5y"].resample("ME").last()
+        monthly_levels["cpi"] = raw_levels["cpi"].resample("ME").last().ffill()
+        monthly_levels = monthly_levels.dropna()
 
-        return market_levels, market_returns
+        # 2. Compute Nominal Monthly Returns
+        # S&P 500 simple return
+        r_spx_nom = monthly_levels["spx_close"].pct_change()
+
+        # 3M T-Bill nominal return (1/12th of previous month annualized yield)
+        r_3m_nom = monthly_levels["yield_3m"].shift(1) / 12.0
+
+        # 5Y Note nominal return: Coupon yield - (Modified Duration * Yield Change)
+        # Assuming average modified duration D_5 ~ 4.5 years for 5-year Treasuries
+        duration_5y = 4.5
+        dy_5y = monthly_levels["yield_5y"] - monthly_levels["yield_5y"].shift(1)
+        r_5y_nom = (monthly_levels["yield_5y"].shift(1) / 12.0) - (duration_5y * dy_5y)
+
+        # CPI inflation rate
+        cpi_rate = monthly_levels["cpi"].pct_change()
+
+        # 3. Exact Real Return Deflation: (1 + R_nom) / (1 + CPI) - 1
+        real_returns = pd.DataFrame(index=monthly_levels.index)
+        real_returns["spx_real"] = ((1.0 + r_spx_nom) / (1.0 + cpi_rate)) - 1.0
+        real_returns["yield_3m_real"] = ((1.0 + r_3m_nom) / (1.0 + cpi_rate)) - 1.0
+        real_returns["yield_5y_real"] = ((1.0 + r_5y_nom) / (1.0 + cpi_rate)) - 1.0
+
+        real_returns = real_returns.dropna()
+        monthly_levels = monthly_levels.loc[real_returns.index]
+
+        return monthly_levels, real_returns

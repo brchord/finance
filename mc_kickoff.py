@@ -144,7 +144,7 @@ def main():
         if "workers" in config:
             workers = config["workers"]
         mdm = MarketDataManager(cache_filepath=args.market_data_filename)
-        levels, returns = mdm.get_aligned_data()
+        levels, returns = mdm.get_aligned_real_returns()
     except Exception as exc:
         print(f"Error loading tool configuration: {str(exc)}", sys.stderr)
         sys.exit(1)
