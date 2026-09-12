@@ -10,7 +10,27 @@ from typing import Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
 
-class BlockBootstrapHTMSimulator:
+from abc import ABC, abstractmethod
+
+class PathSimulator(ABC):
+    def __init__(self):
+        super().__init__()
+
+    @abstractmethod
+    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+        pass
+
+    @abstractmethod
+    def simulate_paths(
+        self,
+        num_days: int = 17640,
+        num_paths: int = 10000,
+        seed: Optional[int] = None,
+    ) -> Dict[str, np.ndarray]:
+        return {}
+
+
+class BlockBootstrapHTMSimulator(PathSimulator):
     """
     Non-parametric Circular Block Bootstrap Simulator for Long Equity paired with a 
     Held-To-Maturity (HTM) short-and-intermediate Treasury sleeve.
@@ -18,6 +38,9 @@ class BlockBootstrapHTMSimulator:
     Resamples contiguous historical return/yield blocks to preserve empirical non-linear 
     cross-asset tail dependence, jump clustering, and yield-curve shifts without 
     imposing parametric distribution assumptions.
+
+    TODO: Align this implementation to return data with the same shape
+          as the other path simulators.
     """
 
     def __init__(
@@ -66,6 +89,15 @@ class BlockBootstrapHTMSimulator:
 
         if len(self.data) < self.block_size:
             raise ValueError("Historical data length must exceed block_size_days.")
+
+    @classmethod
+    def name(cls):
+        return "BlockBootstrapHTMSimulator"
+
+
+    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+        pass
+
 
     def simulate_paths(
         self,
@@ -121,7 +153,7 @@ class BlockBootstrapHTMSimulator:
         return {"spx": spx_paths, "tbill_yield": tbill_paths, "tnote_yield": tnote_paths}
 
 
-class VARResidualBootstrapSimulator:
+class VARResidualBootstrapSimulator(PathSimulator):
     """
     Vectorized VAR(p) Filtered Block Bootstrap Engine.
     Fits an unconstrained Vector Autoregression on daily increments and resamples 
@@ -154,6 +186,12 @@ class VARResidualBootstrapSimulator:
         self.initial_spx_level: Optional[float] = None
         self.initial_yield_3m: Optional[float] = None
         self.initial_yield_5y: Optional[float] = None
+
+
+    @classmethod
+    def name(cls):
+        return "VARResidualBootstrapSimulator"
+
 
     def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
         """
@@ -247,7 +285,7 @@ class VARResidualBootstrapSimulator:
         return spx_paths, yield_3m_paths, yield_5y_paths
 
 
-class ValuationAdjustedVARSimulator:
+class ValuationAdjustedVARSimulator(PathSimulator):
     """
     Parametric Gaussian VAR(p) Engine with Cyclical Valuation (CAPE) Mean-Reversion.
 
@@ -304,6 +342,12 @@ class ValuationAdjustedVARSimulator:
         self.initial_yield_3m: Optional[float] = None
         self.initial_yield_5y: Optional[float] = None
         self.initial_cape: float = 34.0
+
+
+    @classmethod
+    def name(cls):
+        return "ValuationAdjustedVARSimulator"
+
 
     def fit(
         self,
@@ -410,7 +454,7 @@ class ValuationAdjustedVARSimulator:
         return spx_paths, yield_3m_paths, yield_5y_paths
 
 
-class HybridValuationVARSimulator:
+class HybridValuationVARSimulator(PathSimulator):
     """
     Hybrid VECM/VAR Filtered Residual Bootstrap Engine.
 
@@ -466,6 +510,12 @@ class HybridValuationVARSimulator:
         self.initial_yield_3m: Optional[float] = None
         self.initial_yield_5y: Optional[float] = None
         self.initial_cape: float = 34.0
+
+
+    @classmethod
+    def name(cls):
+        return "HybridValuationVARSimulator"
+
 
     def fit(
         self,
