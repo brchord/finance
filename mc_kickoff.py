@@ -190,7 +190,7 @@ def main():
             simulator.fit(returns, levels)
 
             strategy = LongSPYWithTreasuryLadders.from_json_object(p)
-            mc = MonteCarloEngine(strategy, simulator, years_to_simulate * 252,
+            mc = MonteCarloEngine(strategy, simulator, years_to_simulate * 12,
                                   initial_nav, rng.integers(1 << 32))
 
             setup_end = time.perf_counter()

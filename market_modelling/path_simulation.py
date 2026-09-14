@@ -554,6 +554,7 @@ class HybridValuationVARSimulator(PathSimulator):
         self.residual_matrix: Optional[np.ndarray] = None
         self.historical_seed_matrix: Optional[np.ndarray] = None
         self.historical_mean_returns: Optional[np.ndarray] = None
+        self.expected_inflation: float = None
         self.initial_cape: float = 34.0
         self.initial_spx_level: float = None
         self.initial_cpi_level: float = None
@@ -584,6 +585,7 @@ class HybridValuationVARSimulator(PathSimulator):
             Starting Shiller CAPE. Calibration Range: 25.0 to 38.0.
         """
         self.initial_cape = initial_cape
+        self.expected_inflation = float(returns_data["cpi_log_return"].mean() * 12)
         increment_matrix = returns_data.values
         total_observations, _ = increment_matrix.shape
         p = self.lag_order
@@ -668,7 +670,7 @@ class HybridValuationVARSimulator(PathSimulator):
         log_target_cape = np.log(self.target_cape)
 
         # Sustainable real return anchor
-        equilibrium_equity_drift = self.earnings_growth * dt
+        equilibrium_equity_drift = (self.earnings_growth + self.expected_inflation) * dt
         historical_spx_mean = self.historical_mean_returns[0]
 
         for step in range(simulation_months):
