@@ -1,12 +1,11 @@
 {
-    "yearly_spending_floor": 180000,
-    "yearly_spending_ceil": 190000,
-    "spend_increments": 2500,
+    "yearly_spending_floor": 150000,
+    "yearly_spending_ceil": 200000,
+    "spend_increments": 10000,
     "starting_equity": 0.8,
     "weight_increments": 0.05,
-    "inflation": 0.035,
     "initial_nav": 8500000,
     "years_to_simulate": 63,
-    "total_paths": 10000,
-    "workers": 16
+    "total_paths": 1000,
+    "workers": 20
 }

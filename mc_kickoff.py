@@ -47,7 +47,6 @@ class MCConfig():
         "ladder_allocation": None,
         "yearly_spending":  None,
         "dividend_yield": 0.01,
-        "average_inflation": None
     }
 
     def __init__(self, *,
@@ -55,14 +54,12 @@ class MCConfig():
                  yearly_spending_ceil: float = 300_000,
                  starting_equity: float = 0.75,
                  weight_increments: float = 0.05,
-                 spend_increments: float = 5000.0,
-                 inflation: float = 0.034):
+                 spend_increments: float = 5000.0):
         self.yearly_low = yearly_spending_floor
         self.yearly_top = yearly_spending_ceil
         self.equity_low = starting_equity
         self.eq_increment = weight_increments
         self.spend_increment = spend_increments
-        self.inflation = inflation
 
 
     def portfolio_configs(self):
@@ -81,7 +78,6 @@ class MCConfig():
                 p["equity_allocation"] = equity
                 p["ladder_allocation"] = fixed
                 p["yearly_spending"] = yearly
-                p["average_inflation"] = self.inflation
                 yield p
                 yearly += self.spend_increment
             equity += self.eq_increment
@@ -136,8 +132,7 @@ def main():
             yearly_spending_ceil=config["yearly_spending_ceil"],
             starting_equity=config["starting_equity"],
             weight_increments=config["weight_increments"],
-            spend_increments=config["spend_increments"],
-            inflation=config["inflation"])
+            spend_increments=config["spend_increments"])
         initial_nav = config["initial_nav"]
         years_to_simulate = config["years_to_simulate"]
         total_paths = config["total_paths"]
@@ -227,7 +222,7 @@ def main():
     results["perf_data"] = perf_counters
 
     with open(args.output_filename, "w", encoding="utf-8") as f:
-        json.dump(results, f)
+        json.dump(results, f, indent=4)
 
 if __name__ == '__main__':
     main()

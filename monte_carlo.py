@@ -59,7 +59,7 @@ class MonteCarloEngine:
         initial_nav: float,
         num_paths: int,
         seed: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Static worker method executing a batch of paths inside an isolated process.
 
@@ -74,32 +74,27 @@ class MonteCarloEngine:
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
         max_drawdowns = np.empty(num_paths)
-        path_trajectories = np.empty((num_paths, simulation_months))
 
         # Generate batch real wealth index paths via simulator interface
-        sim_paths: Dict[str, np.ndarray] = path_simulator.simulate_paths(
+        spx_paths, cpi_paths, tbill_paths, tnote_paths = path_simulator.simulate_paths(
             simulation_months=simulation_months,
             num_paths=num_paths,
             seed=seed,
         )
 
-        spx_paths = sim_paths["spx_real"]
-        tbill_paths = sim_paths["tbill_real"]
-        tnote_paths = sim_paths["tnote_real"]
-
         for i in range(num_paths):
             # Execute monthly strategy simulation
             # (Note: sim_paths include starting point at idx 0, passing monthly steps 1:)
             path_navs = strategy.run_simulation(
-                spx=spx_paths[i, 1:],
-                yield3m=tbill_paths[i, 1:],
-                yield5y=tnote_paths[i, 1:],
+                spx=spx_paths[i, :],
+                cpi=cpi_paths[i, :],
+                yield3m=tbill_paths[i, :],
+                yield5y=tnote_paths[i, :],
                 initial_nav=initial_nav,
                 months=simulation_months,
                 full_book=False,
             )
 
-            path_trajectories[i, :] = path_navs
             final_spx[i] = spx_paths[i, -1]
             final_navs[i] = path_navs[-1]
 
@@ -108,15 +103,13 @@ class MonteCarloEngine:
             drawdowns = (peak - path_navs) / peak
             max_drawdowns[i] = -np.max(drawdowns)
 
-        return final_spx, final_navs, max_drawdowns, path_trajectories
+        return final_spx, final_navs, max_drawdowns
 
     def run(
         self,
         *,
-        total_paths: int = 10000,
-        n_workers: int = 8,
-        return_trajectories: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        total_paths: int,
+        n_workers: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Spawns and manages parallel execution across available CPU cores.
 
@@ -126,14 +119,12 @@ class MonteCarloEngine:
             Total Monte Carlo paths to generate and evaluate.
         n_workers : int, default=8
             Number of parallel process workers in the process pool.
-        return_trajectories : bool, default=False
-            If True, returns full monthly NAV matrix (total_paths, simulation_months).
 
         Returns:
         --------
         Tuple containing (final_spx, final_navs, max_drawdowns, optional_trajectories)
         """
-        chunk_size = max(100, total_paths // (n_workers * 4))
+        chunk_size = total_paths // n_workers
         chunks = []
 
         remaining_paths = total_paths
@@ -145,7 +136,6 @@ class MonteCarloEngine:
         all_final_spx = []
         all_final_navs = []
         all_max_drawdowns = []
-        all_trajectories = [] if return_trajectories else None
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
@@ -162,23 +152,17 @@ class MonteCarloEngine:
             ]
 
             for future in as_completed(futures):
-                f_spx, f_navs, m_dds, trajectories = future.result()
+                f_spx, f_navs, m_dds = future.result()
                 all_final_spx.append(f_spx)
                 all_final_navs.append(f_navs)
                 all_max_drawdowns.append(m_dds)
-                if return_trajectories:
-                    all_trajectories.append(trajectories)
 
         concatenated_spx = np.concatenate(all_final_spx)
         concatenated_navs = np.concatenate(all_final_navs)
         concatenated_dds = np.concatenate(all_max_drawdowns)
-        concatenated_trajectories = (
-            np.vstack(all_trajectories) if return_trajectories else None
-        )
 
         return (
             concatenated_spx,
             concatenated_navs,
             concatenated_dds,
-            concatenated_trajectories,
         )

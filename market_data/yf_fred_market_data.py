@@ -106,34 +106,31 @@ class MarketDataManager:
         # 1. Resample to Month-End frequency to align Daily Financial Data with Monthly CPI
         monthly_levels = pd.DataFrame()
         monthly_levels["spx_close"] = raw_levels["spx_close"].resample("ME").last()
+        monthly_levels["cpi"] = raw_levels["cpi"].resample("ME").last().ffill()
         monthly_levels["yield_3m"] = raw_levels["yield_3m"].resample("ME").last()
         monthly_levels["yield_5y"] = raw_levels["yield_5y"].resample("ME").last()
-        monthly_levels["cpi"] = raw_levels["cpi"].resample("ME").last().ffill()
         monthly_levels = monthly_levels.dropna()
 
         # 2. Compute Nominal Monthly Returns
-        # S&P 500 simple return
-        r_spx_nom = monthly_levels["spx_close"].pct_change()
+        # S&P 500 log returns
+        spx_log_ret = np.log(monthly_levels["spx_close"] / monthly_levels["spx_close"].shift(1))
+
+        # CPI log inflation rate
+        cpi_log_ret = np.log(monthly_levels["cpi"] / monthly_levels["cpi"].shift(1))
 
         # 3M T-Bill nominal return (1/12th of previous month annualized yield)
-        r_3m_nom = monthly_levels["yield_3m"].shift(1) / 12.0
+        yield3m_diff = monthly_levels["yield_3m"].diff()
 
         # 5Y Note nominal return: Coupon yield - (Modified Duration * Yield Change)
         # Assuming average modified duration D_5 ~ 4.5 years for 5-year Treasuries
-        duration_5y = 4.5
-        dy_5y = monthly_levels["yield_5y"] - monthly_levels["yield_5y"].shift(1)
-        r_5y_nom = (monthly_levels["yield_5y"].shift(1) / 12.0) - (duration_5y * dy_5y)
+        #duration_5y = 4.5
+        yield5y_diff = monthly_levels["yield_5y"].diff()
 
-        # CPI inflation rate
-        cpi_rate = monthly_levels["cpi"].pct_change()
+        market_returns = pd.DataFrame(index=monthly_levels.index[1:])
+        market_returns["spx_log_return"] = spx_log_ret
+        market_returns["cpi_log_return"] = cpi_log_ret
+        market_returns["yield_3m_diff"] = yield3m_diff
+        market_returns["yield_5y_diff"] = yield5y_diff
+        market_returns = market_returns.dropna()
 
-        # 3. Exact Real Return Deflation: (1 + R_nom) / (1 + CPI) - 1
-        real_returns = pd.DataFrame(index=monthly_levels.index)
-        real_returns["spx_real"] = ((1.0 + r_spx_nom) / (1.0 + cpi_rate)) - 1.0
-        real_returns["yield_3m_real"] = ((1.0 + r_3m_nom) / (1.0 + cpi_rate)) - 1.0
-        real_returns["yield_5y_real"] = ((1.0 + r_5y_nom) / (1.0 + cpi_rate)) - 1.0
-
-        real_returns = real_returns.dropna()
-        monthly_levels = monthly_levels.loc[real_returns.index]
-
-        return monthly_levels, real_returns
+        return monthly_levels, market_returns

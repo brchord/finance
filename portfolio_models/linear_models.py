@@ -40,9 +40,10 @@ class InvestmentStrategy(ABC):
     def run_simulation(
         self,
         *,
-        spx: np.ndarray,         # Real cumulative index or real returns for SPX (length = months)
-        yield3m: np.ndarray,     # Real cumulative index or real returns for 3M T-Bills
-        yield5y: np.ndarray,     # Real cumulative index or real returns for 5Y T-Notes
+        spx: np.ndarray,         # SPX monthly time series
+        cpi: np.ndarray,         # CPI monthly pct changes
+        yield3m: np.ndarray,     # 3M T-Bill yield
+        yield5y: np.ndarray,     # 5Y T-Note yield
         initial_nav: float,      # Initial NAV
         months: int,             # Total months to run the simulation
         full_book: bool = False, # Track full transaction book for debugging
@@ -84,6 +85,7 @@ class FixedIncomeStrategy(InvestmentStrategy):
         self,
         *,
         spx: np.ndarray,
+        cpi: np.ndarray,
         yield3m: np.ndarray,
         yield5y: np.ndarray,
         initial_nav: float,
@@ -155,6 +157,7 @@ class LongSPYStrategy(InvestmentStrategy):
         self,
         *,
         spx: np.ndarray,
+        cpi: np.ndarray,
         yield3m: np.ndarray,
         yield5y: np.ndarray,
         initial_nav: float,
@@ -269,6 +272,7 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
         self,
         *,
         spx: np.ndarray,
+        cpi: np.ndarray,
         yield3m: np.ndarray,
         yield5y: np.ndarray,
         initial_nav: float,
@@ -285,6 +289,7 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
             total_weight += weight
             partial = portfolio.run_simulation(
                 spx=spx,
+                cpi=cpi,
                 yield3m=yield3m,
                 yield5y=yield5y,
                 initial_nav=initial_nav * weight,
@@ -343,7 +348,6 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         ladder_allocation: float,
         yearly_spending: float,
         spy_avg_dividend_yield: float = 0.01,
-        average_inflation: float = 0.034,
     ):
         if not math.isclose(equity_allocation + ladder_allocation, 1.0, abs_tol=1e-4):
             raise ValueError("Portfolio allocation must sum up to 100%")
@@ -352,7 +356,6 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.ladder_allocation = ladder_allocation
         self.yearly_spending = yearly_spending
         self.spy_div_yield = spy_avg_dividend_yield
-        self.inflation = average_inflation
 
     @staticmethod
     def _get_needed_liquidity(
@@ -371,6 +374,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self,
         *,
         spx: np.ndarray,
+        cpi: np.ndarray,
         yield3m: np.ndarray,
         yield5y: np.ndarray,
         initial_nav: float,
@@ -446,6 +450,9 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         sma4 = spx_series.rolling(window=4, min_periods=1).mean().values
         sma9 = spx_series.rolling(window=9, min_periods=1).mean().values
 
+        cpi_pct = pd.Series(cpi).pct_change().shift(-1)
+        cpi_pct[-1] = 0.0
+
         return_path = np.zeros(months)
 
         for m in range(months):
@@ -453,7 +460,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             transaction_month = False
             assert spy_position_size >= 0
 
-            # 1. Monthly withdrawal execution
+            # Monthly withdrawal execution
             cash -= monthly_withdrawal
             if full_book:
                 self.book.append({
@@ -464,7 +471,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 })
                 transaction_month = True
 
-            # 2. Quarterly SPY Dividend Payment (Every 3 months)
+            # Quarterly SPY Dividend Payment (Every 3 months)
             if m % 3 == 0 and m > 0:
                 cash_dividend = spy_position_size * day_spy * self.spy_div_yield / 4.0
                 if cash_dividend > 0:
@@ -478,16 +485,16 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         })
                         transaction_month = True
 
-            # 3. Monthly T-Bill Yield Accrual
-            tbill_monthly_return = yield3m[m] if yield3m[m] < 1.0 else (yield3m[m] / 12.0)
+            # Monthly T-Bill Yield Accrual
+            tbill_monthly_return = yield3m[m] / 12.0
             cash *= (1.0 + tbill_monthly_return)
 
-            # 4. Semi-annual T-Note Coupon Distribution & Maturities (Every 6 months)
+            # Semi-annual T-Note Coupon Distribution & Maturities (Every 6 months)
             expired_notes = []
             for idx, (maturity_m, amount, rate) in tnotes.items():
                 months_remaining = maturity_m - m
                 if months_remaining % 6 == 0 and m > 0:
-                    tnote_coupon = amount * (rate / 2.0 if rate < 1.0 else rate / 200.0)
+                    tnote_coupon = amount * (rate / 2.0)
                     cash += tnote_coupon
                     if full_book:
                         self.book.append({
@@ -518,7 +525,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             current_nav = cash + (spy_position_size * day_spy) + tnote_position
             fixed_income_position = cash + tnote_position
 
-            # 5. Strategic Equity Rebalancing into Fixed Income
+            # Strategic Equity Rebalancing into Fixed Income
             if fixed_income_position / current_nav <= self.ladder_allocation * 0.8:
                 if m >= 9 and day_spy >= ema1_5[m] and day_spy >= sma4[m] and day_spy >= sma9[m]:
                     needed_amount = (current_nav * self.ladder_allocation) - fixed_income_position
@@ -542,7 +549,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                             spy_position_size -= selling_position
                             cash += selling_position * day_spy
 
-            # 6. Reserve Deficit Protection (Sell Equity if Cash Runway < Threshold)
+            # Reserve Deficit Protection (Sell Equity if Cash Runway < Threshold)
             req_liquidity = self._get_needed_liquidity(monthly_withdrawal, m, tnotes)
             div_events_expected = math.floor(req_liquidity / monthly_withdrawal / 3.0)
             expected_dividends = spy_position_size * spy_price * self.spy_div_yield * (div_events_expected / 4.0)
@@ -565,7 +572,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                     spy_position_size -= selling_position
                     cash += selling_position * day_spy
 
-            # 7. Surplus Cash Allocation into T-Note Ladder
+            # Surplus Cash Allocation into T-Note Ladder
             if cash >= (2.0 * current_nav * self.ladder_allocation / 5.0):
                 tnote_maturity = 24
                 if len(tnotes) > 0:
@@ -591,9 +598,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                     tnote_id += 1
                     cash -= tnote_tranche
 
-            # 8. Annual Inflation Adjustment for Monthly Withdrawals (Every 12 months)
-            if (m + 1) % 12 == 0:
-                monthly_withdrawal *= (1.0 + self.inflation)
+            # Discount current reported inflation in the simulated CPI
+            monthly_withdrawal *= 1.0 + cpi_pct[m]
 
             # Mark to Market Log
             if full_book and transaction_month:
@@ -638,5 +644,4 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             float(o["ladder_allocation"]),
             float(o["yearly_spending"]),
             float(o.get("dividend_yield", 0.01)),
-            float(o.get("average_inflation", 0.034)),
         )
