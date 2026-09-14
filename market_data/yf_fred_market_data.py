@@ -55,12 +55,17 @@ class MarketDataManager:
         cpi_raw = pd.read_csv(
             fred_cpi_url, parse_dates=["observation_date"], index_col="observation_date")
 
-        yield_3m_series = pd.to_numeric(tbill_raw["DGS3MO"], errors="coerce").rename("yield_3m") / 100.0
-        yield_5y_series = pd.to_numeric(tnote_raw["DGS5"], errors="coerce").rename("yield_5y") / 100.0
-        cpi_series = pd.to_numeric(cpi_raw["CPIAUCSL"], errors="coerce").rename("cpi")
+        yield_3m_series = pd.to_numeric(
+            tbill_raw["DGS3MO"], errors="coerce").rename("yield_3m") / 100.0
+        yield_5y_series = pd.to_numeric(
+            tnote_raw["DGS5"], errors="coerce").rename("yield_5y") / 100.0
+        cpi_series = pd.to_numeric(
+            cpi_raw["CPIAUCSL"], errors="coerce").rename("cpi")
 
         # Combine raw fetched daily levels (CPI will be monthly points filled forward initially)
-        remote_levels = pd.concat([spx_series, yield_3m_series, yield_5y_series, cpi_series], axis=1)
+        remote_levels = pd.concat(
+            [spx_series, yield_3m_series, yield_5y_series, cpi_series],
+            axis=1)
         return remote_levels.loc[start_date:end_date]
 
     def load_or_update_market_levels(self, force_refresh: bool = False) -> pd.DataFrame:
@@ -96,7 +101,9 @@ class MarketDataManager:
 
         return market_levels
 
-    def get_aligned_real_returns(self, force_refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def get_aligned_real_returns(
+            self,
+            force_refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Resamples market levels to monthly frequency and computes 3D real monthly returns:
         [r_spx_real, r_3m_real, r_5y_real].

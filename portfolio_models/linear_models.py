@@ -13,7 +13,7 @@ investment strategies modified for monthly real-space simulation paths:
 import logging
 import math
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, override
+from typing import Dict, List, Tuple, override
 
 import numpy as np
 import pandas as pd
@@ -166,7 +166,7 @@ class LongSPYStrategy(InvestmentStrategy):
     ) -> np.ndarray:
         """Run portfolio simulation on monthly steps."""
         self.book.clear()
-        
+
         # Determine initial price baseline from equity index
         p0 = spx[0] if spx[0] > 0 else 1.0
         spy_price = p0 / 10.0
@@ -248,7 +248,8 @@ class LongSPYStrategy(InvestmentStrategy):
 
 class CombinedPortfolioStrategy(InvestmentStrategy):
     """
-    Computes total return of a linear combination of multiple Investment Strategies on a monthly grid.
+    Computes total return of a linear combination of multiple Investment Strategies
+    on a monthly grid.
     """
 
     def __init__(self, components: List[Tuple[InvestmentStrategy, float]]):
@@ -264,7 +265,8 @@ class CombinedPortfolioStrategy(InvestmentStrategy):
 
         if total_weight < 1.0:
             rem = 1.0 - total_weight
-            logging.debug("Warning: Portfolio components don't add to 100%, keeping remainder %.2f%% in cash", rem * 100)
+            logging.debug("Warning: Portfolio components don't add to 100%%, "
+                          "keeping remainder %.2f%% in cash", rem * 100)
 
         self.components = components
 
@@ -385,7 +387,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         monthly_withdrawal = self.yearly_spending / 12.0
         spx_prices = spx / 10.0
         spy_price = spx_prices[0]
-        
+
         spy_position_size = math.ceil(initial_nav * self.equity_allocation / spy_price)
         tnote_amount = initial_nav * self.ladder_allocation / 5.0
 
@@ -552,7 +554,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             # Reserve Deficit Protection (Sell Equity if Cash Runway < Threshold)
             req_liquidity = self._get_needed_liquidity(monthly_withdrawal, m, tnotes)
             div_events_expected = math.floor(req_liquidity / monthly_withdrawal / 3.0)
-            expected_dividends = spy_position_size * spy_price * self.spy_div_yield * (div_events_expected / 4.0)
+            expected_dividends = spy_position_size * spy_price * self.spy_div_yield * \
+                (div_events_expected / 4.0)
             spending_needs = req_liquidity - expected_dividends
             current_runway = cash - spending_needs
 

@@ -7,7 +7,7 @@ operating on monthly real-space path outputs from PathSimulator instances.
 
 import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -35,7 +35,8 @@ class MonteCarloEngine:
         Parameters:
         -----------
         strategy : InvestmentStrategy
-            Portfolio model implementing `run_simulation(spx, yield3m, yield5y, initial_nav, months)`.
+            Portfolio model implementing 
+            `run_simulation(spx, yield3m, yield5y, initial_nav, months)`.
         simulator : PathSimulator
             Fitted path simulation engine instance inheriting from PathSimulator.
         simulation_months : int, default=360 (30 years)
@@ -69,7 +70,8 @@ class MonteCarloEngine:
             1. final_spx (np.ndarray): Terminal real SPX index levels (num_paths,).
             2. final_navs (np.ndarray): Terminal NAV values (num_paths,).
             3. max_drawdowns (np.ndarray): Maximum peak-to-trough drawdowns (num_paths,).
-            4. path_trajectories (np.ndarray): Complete monthly NAV matrix (num_paths, simulation_months).
+            4. path_trajectories (np.ndarray): Complete monthly NAV matrix:
+                                               (num_paths, simulation_months).
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
