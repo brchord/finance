@@ -154,7 +154,7 @@ def main():
     print(" ".join(kvs))
 
     models = [
-        #ps.BlockBootstrapHTMSimulator,
+        ps.RawBlockBootstrapSimulator,
         ps.HybridValuationVARSimulator,
         ps.VARResidualBootstrapSimulator,
         ps.ValuationAdjustedVARSimulator]

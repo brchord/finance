@@ -720,3 +720,157 @@ class HybridValuationVARSimulator(PathSimulator):
             path_histories[:, -1, :] = predicted_increments
 
         return spx_paths, cpi_paths, yield_3m_paths, yield_5y_paths
+
+
+class RawBlockBootstrapSimulator(PathSimulator):
+    """
+    Bare joint block-bootstrap baseline: no VAR conditional-mean fitting, no
+    CAPE valuation drag. Every month's [spx, cpi, yield_3m, yield_5y] increment
+    is drawn directly, unmodified, from a real historical calendar block --
+    there is no fitted coefficient matrix and no forecasting structure of any
+    kind for equity or inflation.
+
+    The ONE exception is yields: a simple mean-reversion floor is retained.
+    This is deliberate and is NOT part of "VAR" or "CAPE" as forecasting
+    frameworks -- it's a structural/economic constraint (nominal yields don't
+    unboundedly random-walk over a 63-70 year horizon). Without it, this
+    model would just reproduce the yield-divergence bug already diagnosed and
+    fixed elsewhere in this codebase, adding no new diagnostic value. See
+    VARResidualBootstrapSimulator's docstring for the empirical calibration
+    behind the block_size default and rate_reversion_speed range.
+
+    Use this as the "zero forecasting cleverness" sanity anchor: if this
+    model and the VAR/CAPE models diverge sharply, the divergence is coming
+    from the VAR/CAPE machinery's assumptions, not from anything structural.
+    """
+
+    def __init__(
+        self,
+        block_size: int = 48,
+        rate_reversion_speed: float = 0.15,
+        target_yield_3m: Optional[float] = None,
+        target_yield_5y: Optional[float] = None,
+    ):
+        """
+        Parameters & Calibration Ranges:
+        ---------------------------------
+        block_size : int, default=48 (4 years)
+            Block size in months for jointly bootstrapping raw historical
+            [spx, cpi, yield_3m, yield_5y] increments (no VAR fit involved).
+            Calibration Range: 24 to 60 months (2 to 5 years). See
+            VARResidualBootstrapSimulator for the empirical rationale.
+
+        rate_reversion_speed : float (phi_rate), default=0.15
+            Annual mean-reversion speed pulling 3M/5Y yields back toward their
+            long-run equilibrium levels. Calibration Range: 0.05 to 0.25.
+            This is a structural constraint, not a forecasting assumption --
+            see class docstring.
+
+        target_yield_3m, target_yield_5y : float, optional
+            Long-run equilibrium yield levels used as the reversion anchor.
+            If None (default), estimated from the historical sample mean at
+            fit() time.
+        """
+        self.block_size = block_size
+        self.phi_rate = rate_reversion_speed
+        self.target_yield_3m = target_yield_3m
+        self.target_yield_5y = target_yield_5y
+
+        self.historical_matrix: Optional[np.ndarray] = None
+        self.initial_spx_level: float = None
+        self.initial_cpi_level: float = None
+        self.initial_yield_3m: float = None
+        self.initial_yield_5y: float = None
+
+    @classmethod
+    def name(cls):
+        return "RawBlockBootstrapSimulator"
+
+    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+        """
+        Stores the raw historical increment matrix directly -- no VAR fit,
+        no coefficient estimation, no residual extraction. What you draw at
+        simulation time is exactly what was realized historically.
+        """
+        self.historical_matrix = returns_data[
+            ["spx_log_return", "cpi_log_return", "yield_3m_diff", "yield_5y_diff"]
+        ].values
+
+        self.initial_spx_level = float(levels_data["spx_close"].iloc[-1])
+        self.initial_cpi_level = float(levels_data["cpi"].iloc[-1])
+        self.initial_yield_3m = float(levels_data["yield_3m"].iloc[-1])
+        self.initial_yield_5y = float(levels_data["yield_5y"].iloc[-1])
+
+        if self.target_yield_3m is None:
+            self.target_yield_3m = float(levels_data["yield_3m"].mean())
+        if self.target_yield_5y is None:
+            self.target_yield_5y = float(levels_data["yield_5y"].mean())
+
+    def simulate_paths(
+        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Parameters:
+        -----------
+        simulation_months : int, default=360
+            Total monthly simulation steps.
+        num_paths : int, default=10000
+            Number of Monte Carlo paths generated.
+        seed : int, optional
+            RNG seed for exact reproducibility.
+
+        Returns:
+        --------
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            Simulated equity, inflation and fixed income matrices.
+        """
+        if self.historical_matrix is None:
+            raise RuntimeError("Model is not fitted. Call fit() first.")
+
+        rng = np.random.default_rng(seed)
+        effective_sample_size, num_variables = self.historical_matrix.shape
+        block_size = self.block_size
+        dt = 1.0 / 12.0
+
+        num_blocks = int(np.ceil(simulation_months / block_size))
+        max_start_index = effective_sample_size - block_size
+        random_block_starts = rng.integers(0, max_start_index + 1, size=(num_paths, num_blocks))
+
+        bootstrapped_increments = np.zeros((num_paths, num_blocks * block_size, num_variables))
+        for path_idx in range(num_paths):
+            sampled_blocks = [
+                self.historical_matrix[start:start + block_size]
+                for start in random_block_starts[path_idx]]
+            bootstrapped_increments[path_idx] = np.vstack(sampled_blocks)
+        bootstrapped_increments = bootstrapped_increments[:, :simulation_months, :]
+
+        spx_paths = np.zeros((num_paths, simulation_months))
+        cpi_paths = np.zeros((num_paths, simulation_months))
+        yield_3m_paths = np.zeros((num_paths, simulation_months))
+        yield_5y_paths = np.zeros((num_paths, simulation_months))
+
+        curr_spx = np.full(num_paths, self.initial_spx_level)
+        curr_cpi = np.full(num_paths, self.initial_cpi_level)
+        curr_3m = np.full(num_paths, self.initial_yield_3m)
+        curr_5y = np.full(num_paths, self.initial_yield_5y)
+
+        for step in range(simulation_months):
+            raw = bootstrapped_increments[:, step, :]
+
+            spx_log_ret = raw[:, 0]
+            cpi_log_ret = raw[:, 1]
+            # Structural yield anchor only -- see class docstring.
+            diff_3m = raw[:, 2] - self.phi_rate * (curr_3m - self.target_yield_3m) * dt
+            diff_5y = raw[:, 3] - self.phi_rate * (curr_5y - self.target_yield_5y) * dt
+
+            curr_spx *= np.exp(spx_log_ret)
+            curr_cpi *= np.exp(cpi_log_ret)
+            curr_3m = np.maximum(0.0, curr_3m + diff_3m)
+            curr_5y = np.maximum(0.0, curr_5y + diff_5y)
+
+            spx_paths[:, step] = curr_spx
+            cpi_paths[:, step] = curr_cpi
+            yield_3m_paths[:, step] = curr_3m
+            yield_5y_paths[:, step] = curr_5y
+
+        return spx_paths, cpi_paths, yield_3m_paths, yield_5y_paths
