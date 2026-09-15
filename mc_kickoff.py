@@ -153,7 +153,9 @@ def main():
     kvs: dict[str, float] = [f"{k.replace('_', ' ').title()}: {v}" for k, v in config.items()]
     print(" ".join(kvs))
 
+
     models = [
+        ps.RegimeSwitchingBootstrapSimulator,
         ps.RawBlockBootstrapSimulator,
         ps.HybridValuationVARSimulator,
         ps.VARResidualBootstrapSimulator,
