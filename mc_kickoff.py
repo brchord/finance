@@ -53,11 +53,13 @@ class MCConfig():
                  yearly_spending_floor: float = 150_000,
                  yearly_spending_ceil: float = 300_000,
                  starting_equity: float = 0.75,
+                 ending_equity: float = 1.00,
                  weight_increments: float = 0.05,
                  spend_increments: float = 5000.0):
         self.yearly_low = yearly_spending_floor
         self.yearly_top = yearly_spending_ceil
         self.equity_low = starting_equity
+        self.equity_top = ending_equity
         self.eq_increment = weight_increments
         self.spend_increment = spend_increments
 
@@ -72,7 +74,7 @@ class MCConfig():
         yearly_limit = int(self.yearly_top / 5000.0) * 5000
         equity = math.ceil(self.equity_low * 500) / 500.0
         fixed = 1.0 - equity
-        while equity < 1.0:
+        while equity <= self.equity_top:
             while yearly <= yearly_limit:
                 p = copy.deepcopy(self.PORTFOLIO_CONFIG_TEMPLATE)
                 p["equity_allocation"] = equity
@@ -155,6 +157,7 @@ def main():
 
 
     models = [
+        ps.RegimeSwitchingValuationVARSimulator,
         ps.RegimeSwitchingBootstrapSimulator,
         ps.RawBlockBootstrapSimulator,
         ps.HybridValuationVARSimulator,

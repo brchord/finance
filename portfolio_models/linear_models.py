@@ -633,6 +633,12 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         "description": "T-Note MTM",
                     })
 
+            current_nav = cash + (spy_position_size * day_spy) + tnote_position
+            # If we ran out of money, stop the loop and let the remaining path
+            # vector to be zero-filled.
+            if current_nav <= 0:
+                break
+
             return_path[m] = current_nav
 
         return return_path
