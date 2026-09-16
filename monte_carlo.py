@@ -69,13 +69,12 @@ class MonteCarloEngine:
         Tuple containing:
             1. final_spx (np.ndarray): Terminal real SPX index levels (num_paths,).
             2. final_navs (np.ndarray): Terminal NAV values (num_paths,).
-            3. max_drawdowns (np.ndarray): Maximum peak-to-trough drawdowns (num_paths,).
-            4. path_trajectories (np.ndarray): Complete monthly NAV matrix:
-                                               (num_paths, simulation_months).
+            3. ruin_histogram (np.ndarray): For ruin paths, the histogram of the month where
+                                            ruin occurred (num_paths).
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
-        max_drawdowns = np.empty(num_paths)
+        ruin_histogram = np.zeros(simulation_months)
 
         # Generate batch real wealth index paths via simulator interface
         spx_paths, cpi_paths, tbill_paths, tnote_paths = path_simulator.simulate_paths(
@@ -87,7 +86,7 @@ class MonteCarloEngine:
         for i in range(num_paths):
             # Execute monthly strategy simulation
             # (Note: sim_paths include starting point at idx 0, passing monthly steps 1:)
-            path_navs = strategy.run_simulation(
+            nav_paths = strategy.run_simulation(
                 spx=spx_paths[i, :],
                 cpi=cpi_paths[i, :],
                 yield3m=tbill_paths[i, :],
@@ -98,14 +97,13 @@ class MonteCarloEngine:
             )
 
             final_spx[i] = spx_paths[i, -1]
-            final_navs[i] = path_navs[-1]
+            final_navs[i] = nav_paths[-1]
+            if nav_paths[-1] == 0.0:
+                ruin_month = np.argmax(nav_paths == 0.0)
+                ruin_histogram[ruin_month] += 1
 
-            # Calculate path maximum drawdown
-            peak = np.maximum.accumulate(path_navs)
-            drawdowns = (peak - path_navs) / peak
-            max_drawdowns[i] = -np.max(drawdowns)
+        return final_spx, final_navs, ruin_histogram
 
-        return final_spx, final_navs, max_drawdowns
 
     def run(
         self,
@@ -124,7 +122,7 @@ class MonteCarloEngine:
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, max_drawdowns, optional_trajectories)
+        Tuple containing (final_spx, final_navs, ruin_histogram)
         """
         chunk_size = total_paths // n_workers
         chunks = []
@@ -137,7 +135,7 @@ class MonteCarloEngine:
 
         all_final_spx = []
         all_final_navs = []
-        all_max_drawdowns = []
+        full_ruin_histogram = np.zeros(self.simulation_months)
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [
@@ -154,17 +152,16 @@ class MonteCarloEngine:
             ]
 
             for future in as_completed(futures):
-                f_spx, f_navs, m_dds = future.result()
+                f_spx, f_navs, f_ruin_histograms = future.result()
                 all_final_spx.append(f_spx)
                 all_final_navs.append(f_navs)
-                all_max_drawdowns.append(m_dds)
+                full_ruin_histogram += f_ruin_histograms
 
         concatenated_spx = np.concatenate(all_final_spx)
         concatenated_navs = np.concatenate(all_final_navs)
-        concatenated_dds = np.concatenate(all_max_drawdowns)
 
         return (
             concatenated_spx,
             concatenated_navs,
-            concatenated_dds,
+            full_ruin_histogram
         )
