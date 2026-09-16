@@ -5,17 +5,27 @@ Orchestrates multi-process parallel Monte Carlo simulations for any InvestmentSt
 operating on monthly real-space path outputs from PathSimulator instances.
 """
 
+import argparse
+import copy
+import json
 import logging
+import math
+import os
+import time
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple
 
 import numpy as np
+import pandas as pd
 
+import market_modelling.path_simulation as ps
+import portfolio_models.linear_models as lm
+
+from market_data.yf_fred_market_data import MarketDataManager
 from market_modelling.path_simulation import PathSimulator
-from portfolio_models.linear_models import InvestmentStrategy
 
 logger = logging.getLogger(__name__)
-
 
 class MonteCarloEngine:
     """
@@ -25,7 +35,7 @@ class MonteCarloEngine:
 
     def __init__(
         self,
-        strategy: InvestmentStrategy,
+        strategy: lm.InvestmentStrategy,
         simulator: PathSimulator,
         simulation_months: int = 360,
         initial_nav: float = 1_000_000.0,
@@ -54,7 +64,7 @@ class MonteCarloEngine:
 
     @staticmethod
     def _execute_strategy_batch(
-        strategy: InvestmentStrategy,
+        strategy: lm.InvestmentStrategy,
         path_simulator: PathSimulator,
         simulation_months: int,
         initial_nav: float,
@@ -165,3 +175,320 @@ class MonteCarloEngine:
             concatenated_navs,
             full_ruin_histogram
         )
+
+class MonteCarloCLI:
+    """
+    Class encapsulating the Command Line Interface functionality for
+    kicking off Monte Carlo simulations using this sofware package.
+    """
+    SUPPORTED_MODELS = [
+                ps.HybridValuationVARSimulator,
+                ps.RawBlockBootstrapSimulator,
+                ps.RegimeSwitchingBootstrapSimulator,
+                ps.RegimeSwitchingValuationVARSimulator,
+                ps.VARResidualBootstrapSimulator,
+                ps.ValuationAdjustedVARSimulator]
+
+    def __init__(self,
+                 input_config_file: str,
+                 market_data_file: str):
+        self.input_file = input_config_file
+        self.mdm = MarketDataManager(cache_filepath=market_data_file)
+        self.model_map = {m.name(): m for m in self.SUPPORTED_MODELS}
+        self.simulation_config = None
+        self.raw_results = None
+        self.agg_results = None
+
+
+    class MCConfig:
+        """"
+        Represents a Monte Carlo simulation configuration, useful to generate
+        multiple portfolio configs to feed it to the MC engine.
+        """
+        PORTFOLIO_CONFIG_TEMPLATE = {
+            "type": "LongSPYWithTreasuryLadders",
+            "equity_allocation": None,
+            "ladder_allocation": None,
+            "yearly_spending":  None,
+            "dividend_yield": 0.01,
+        }
+
+        def __init__(self, *,
+                    yearly_spending_floor: float = 150_000,
+                    yearly_spending_ceil: float = 300_000,
+                    starting_equity: float = 0.75,
+                    ending_equity: float = 1.00,
+                    weight_increments: float = 0.05,
+                    spend_increments: float = 5000.0,
+                    initial_nav: float = 1_000_000.0,
+                    years_to_simulate: float = 35.0,
+                    retirement_age: float = 65.0,
+                    total_paths: int = 10_000,
+                    n_workers: int = os.cpu_count(),
+                    models: list[str]):
+            self.yearly_low = yearly_spending_floor
+            self.yearly_top = yearly_spending_ceil
+            self.equity_low = starting_equity
+            self.equity_top = ending_equity
+            self.eq_increment = weight_increments
+            self.spend_increment = spend_increments
+            self.initial_nav = initial_nav
+            self.years = years_to_simulate
+            self.retirement_age = retirement_age
+            self.total_paths = total_paths
+            self.n_workers = n_workers
+            self.models = models
+
+        def portfolio_configs(self):
+            """"
+            Generates portfolio configuration by sweeping a range
+            of yearly spendings and equity allocations.
+            """
+            yearly_low = int(self.yearly_low / 5000.0) * 5000
+            yearly_limit = int(self.yearly_top / 5000.0) * 5000
+            equity_low = math.ceil(self.equity_low * 500) / 500.0
+            equity_top = math.ceil(self.equity_top * 500) / 500.0
+            for model in self.models:
+                yearly = yearly_low
+                equity = equity_low
+                fixed = 1.0 - equity
+                while equity <= equity_top + 1e-3:
+                    while yearly <= yearly_limit:
+                        p = copy.deepcopy(self.PORTFOLIO_CONFIG_TEMPLATE)
+                        p["equity_allocation"] = equity
+                        p["ladder_allocation"] = fixed
+                        p["yearly_spending"] = yearly
+                        p["model"] = model
+                        yield p
+                        yearly += self.spend_increment
+                    equity += self.eq_increment
+                    fixed = 1.0 - equity
+                    yearly = yearly_low
+
+        def total_portfolios(self):
+            """Returns the total count of portfolios generated by the given config."""
+            yearly_totals = math.ceil(
+                (self.yearly_top - self.yearly_low) / self.spend_increment) + 1
+            weight_totals = math.ceil(
+                (self.equity_top - self.equity_low) / self.eq_increment) + 1
+            return yearly_totals * weight_totals * len(self.models)
+
+
+    def _load_config(self):
+        try:
+            with open(self.input_file, encoding="utf-8") as f:
+                config = json.load(f)
+            mc_config = MonteCarloCLI.MCConfig(
+                yearly_spending_floor=config["yearly_spending_floor"],
+                yearly_spending_ceil=config["yearly_spending_ceil"],
+                starting_equity=config["equity_floor"],
+                ending_equity=config["equity_ceil"],
+                weight_increments=config["weight_increments"],
+                spend_increments=config["spend_increments"],
+                initial_nav=config["initial_nav"],
+                years_to_simulate=config["years_to_simulate"],
+                retirement_age=config["retirement_age"],
+                total_paths=config["total_paths"],
+                n_workers=config["workers"],
+                models=config["models"])
+            logging.info("Loaded configuration: ")
+            kvs = [f"{k.replace('_', ' ').title()}: {v}" for k, v in config.items()]
+            logging.info(" ".join(kvs))
+            self.simulation_config = mc_config
+        except Exception as exc:
+            logging.error("Error loading tool configuration: %s", str(exc))
+            raise exc
+
+
+    def run(self):
+        """
+        Starts the simulation, collects results and stores them into a
+        dictionary for further serialization and/or aggreggation analysis.
+        """
+        if self.raw_results is not None:
+            raise RuntimeError("CLI run can only be run once per instantiation")
+
+        self._load_config()
+        config = self.simulation_config
+
+        results = {
+            "initial_nav": config.initial_nav,
+            "years": config.years,
+            "total_paths": config.total_paths,
+            "simulations": {},
+            "perf_data": {}
+        }
+
+        perf_counters = {}
+        rng = np.random.default_rng()
+        levels, returns = self.mdm.get_aligned_real_returns()
+        total = config.total_portfolios()
+        i = 0
+
+        for model_name in config.models:
+            if model_name not in self.model_map:
+                raise ValueError(f"Model {model_name} not supported")
+            results["simulations"][model_name] = []
+            perf_counters[model_name] = {}
+            perf_counters[model_name]["setup"] = []
+            perf_counters[model_name]["simulation"] = []
+            perf_counters[model_name]["data_storage"] = []
+
+        portfolios = config.portfolio_configs()
+
+        for p in portfolios:
+            model_name = p["model"]
+            m = self.model_map[model_name]
+            logging.info("Running simulation #%d out of %d. Progress: %.2f%%",
+                            i + 1, total, 100.0 * (i + 1) / total)
+            logging.info("Model: %s, Yearly Spending: $%.2f, Equity: %.2f%%",
+                            model_name, p["yearly_spending"], p["equity_allocation"] * 100.0)
+            setup_start = time.perf_counter()
+
+            simulator = m()
+            simulator.fit(returns, levels)
+
+            strategy = lm.LongSPYWithTreasuryLadders.from_json_object(p)
+            mc = MonteCarloEngine(strategy, simulator, config.years * 12,
+                                    config.initial_nav, rng.integers(1 << 32))
+            setup_end = time.perf_counter()
+
+            perf_counters[model_name]["setup"].append(setup_end - setup_start)
+
+            sim_start = time.perf_counter()
+            spx, nav, ruin_histogram = mc.run(
+                total_paths=config.total_paths, n_workers=config.n_workers)
+            sim_end = time.perf_counter()
+
+            perf_counters[model_name]["simulation"].append(sim_end - sim_start)
+
+            data_start = time.perf_counter()
+            run_output = {
+                    "Terminal SPX": spx.tolist(),
+                    "Terminal NAV": nav.tolist()
+            }
+            results["simulations"][model_name].append({
+                "spending": p["yearly_spending"],
+                "equity": p["equity_allocation"],
+                "ladder": p["ladder_allocation"],
+                "ruin_histogram": ruin_histogram.tolist(),
+                "results": run_output
+            })
+            data_end = time.perf_counter()
+            perf_counters[model_name]["data_storage"].append(data_end - data_start)
+            i += 1
+
+        results["perf_data"] = perf_counters
+        self.raw_results = results
+
+
+    def aggregate(self):
+        """
+        Processes the raw results of a Monte Carlo simulation
+        and generates a dictionary representing the aggregation
+        and statistical information of the given run.
+        """
+        if self.agg_results is not None:
+            raise RuntimeError("Data aggregation can only be run once per CLI instance")
+
+        sim_data = self.raw_results["simulations"]
+        models = list(sim_data.keys())
+
+        initial_nav = self.raw_results["initial_nav"]
+        years = self.raw_results["years"]
+        paths = self.raw_results["total_paths"]
+
+        run_stats = {}
+        run_stats["initial_nav"] = initial_nav
+        run_stats["years_to_simulate"] = years
+        run_stats["total_paths"] = paths
+        run_stats["retirement_age"] = self.simulation_config.retirement_age
+        run_stats["results"] = {}
+
+        for m in models:
+            r = sim_data[m]
+            run_stats["results"][m] = []
+            for sim in r:
+                yearly_spending = sim["spending"]
+                allocation_str = f"{sim["equity"]*100.0:02.0f}-{sim["ladder"]*100.0:02.0f}"
+                df_data = pd.DataFrame(sim["results"])
+                df_data["Returns"] = (df_data["Terminal NAV"] - initial_nav) / initial_nav
+                # Compute the Expected Shortfall 5 and 10 for ages ending in ruin.
+                ruin_ages = {i: int(v) for (i, v) in enumerate(sim["ruin_histogram"]) if v > 0}
+                v = list(ruin_ages.keys())
+                f = list(ruin_ages.values())
+                ruin_flat_data = np.repeat(v, f)
+                p5, p10, p50 = np.quantile(ruin_flat_data, [0.05, 0.1, 0.5])
+                ruin_flat_data.sort()
+                es5_idx = np.where(ruin_flat_data <= p5)
+                es10_idx = np.where(ruin_flat_data <= p10)
+                es5 = ruin_flat_data[es5_idx].mean()
+                es10 = ruin_flat_data[es10_idx].mean()
+                ruin = len(ruin_flat_data)
+                min_ruin_age = ruin_flat_data[0]
+
+                entry = {}
+                entry["spending"] = yearly_spending
+                entry["allocation"] = allocation_str
+
+                entry["ruin_path_count"] = ruin
+                entry["ruin_month_min"] = int(min_ruin_age)
+                entry["ruin_month_median"] = float(p50)
+                entry["ruin_month_es5"] = float(es5)
+                entry["ruin_month_es10"] = float(es10)
+
+                entry["p5_return"] = df_data["Returns"].quantile(0.05)
+                entry["p10_return"] = df_data["Returns"].quantile(0.1)
+
+                entry["p25_return"] = df_data["Returns"].quantile(0.25)
+                entry["p50_return"] = df_data["Returns"].quantile(0.5)
+                run_stats["results"][m].append(entry)
+        self.agg_results = run_stats
+
+
+def parse_args():
+    "CLI argument parser"
+    prog_description = """CLI tool that invokes MC simulation across all portfolio
+    models using the Long Equity and Fixed Income Ladders strategy.
+
+    Returns a CSV file with all the simulation results.
+    """
+    parser = argparse.ArgumentParser(description=prog_description)
+    parser.add_argument("-c", "--config-file",
+                        help="Config file in JSON format that contains the simulation parameters",
+                        dest="config_filename",
+                        required=True)
+    parser.add_argument("-r", "--raw-output-file",
+                        help="Destination JSON file to store the raw results of the simulation",
+                        dest="raw_output_filename",
+                        required=True)
+    parser.add_argument("-o", "--aggregated-output-file",
+                        help="Destination JSON file to store aggregated results of the simulation",
+                        dest="agg_output_filename",
+                        required=True)
+    parser.add_argument("-m", "--market-cache-file",
+                        help="Specifies an alternative parquet market data cache file",
+                        default="market_data.parquet",
+                        dest="market_data_filename")
+    return parser.parse_args()
+
+
+def main():
+    "Main entrypoint"
+    logging.basicConfig(
+        format="%(asctime)s:%(filename)s:"
+               "%(lineno)d:%(levelname)s: %(message)s",
+        level=logging.INFO)
+    args = parse_args()
+    cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
+    cli.run()
+    with open(args.raw_output_filename, "w", encoding="utf-8") as f:
+        json.dump(cli.raw_results, f, indent=4)
+
+    cli.aggregate()
+    with open(args.agg_output_filename, "w", encoding="utf-8") as f:
+        json.dump(cli.agg_results, f, indent=4)
+
+
+if __name__ == '__main__':
+    main()

@@ -784,6 +784,7 @@ class RawBlockBootstrapSimulator(PathSimulator):
 
     @classmethod
     def name(cls):
+        """Model name"""
         return "RawBlockBootstrapSimulator"
 
     def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
@@ -992,6 +993,7 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
 
     @classmethod
     def name(cls):
+        """Model name"""
         return "RegimeSwitchingBootstrapSimulator"
 
     def fit(
@@ -1232,6 +1234,7 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
 
     @classmethod
     def name(cls):
+        """Model name"""
         return "RegimeSwitchingValuationVARSimulator"
 
     def fit(
@@ -1397,7 +1400,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
             curr_3m = np.maximum(0.0, curr_3m + diff_3m)
             curr_5y = np.maximum(0.0, curr_5y + diff_5y)
 
-            log_cape += spx_stochastic_shock - (self.phi_cape + self.gamma_cape) * valuation_gap * dt
+            log_cape += spx_stochastic_shock - \
+                (self.phi_cape + self.gamma_cape) * valuation_gap * dt
 
             spx_paths[:, step] = curr_spx
             cpi_paths[:, step] = curr_cpi

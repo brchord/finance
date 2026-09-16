@@ -1,0 +1,14 @@
+{
+    "yearly_spending_floor": 110000,
+    "yearly_spending_ceil": 120000,
+    "spend_increments": 10000,
+    "equity_floor": 0.5,
+    "equity_ceil": 0.6,
+    "weight_increments": 0.05,
+    "initial_nav": 7500000,
+    "years_to_simulate": 63,
+    "retirement_age": 42,
+    "total_paths": 500,
+    "models": ["HybridValuationVARSimulator", "RegimeSwitchingValuationVARSimulator"],
+    "workers": 20
+}
