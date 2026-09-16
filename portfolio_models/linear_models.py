@@ -171,19 +171,18 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         spx_series = pd.Series(spx_prices)
         # Mapped technical indicators from daily to monthly equivalents:
         # EMA-30 days ~ EMA-1.5 months; SMA-90 days ~ SMA-4 months; SMA-180 days ~ SMA-9 months
-        ema1_5 = spx_series.ewm(span=2, adjust=False).mean().values
+        sma2 = spx_series.rolling(window=2, min_periods=1).mean().values
         sma4 = spx_series.rolling(window=4, min_periods=1).mean().values
         sma9 = spx_series.rolling(window=9, min_periods=1).mean().values
 
         cpi_pct = pd.Series(cpi).pct_change().shift(-1)
-        cpi_pct[-1] = 0.0
+        cpi_pct.iloc[-1] = 0.0
 
         return_path = np.zeros(months)
 
         for m in range(months):
             day_spy = spx_prices[m]
             transaction_month = False
-            assert spy_position_size >= 0
 
             # Monthly withdrawal execution
             cash -= monthly_withdrawal
@@ -252,7 +251,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
 
             # Strategic Equity Rebalancing into Fixed Income
             if fixed_income_position / current_nav <= self.ladder_allocation * 0.8:
-                if m >= 9 and day_spy >= ema1_5[m] and day_spy >= sma4[m] and day_spy >= sma9[m]:
+                if m >= 9 and day_spy >= sma2[m] and day_spy >= sma4[m] and day_spy >= sma9[m]:
                     needed_amount = (current_nav * self.ladder_allocation) - fixed_income_position
                     req_liquidity = self._get_needed_liquidity(monthly_withdrawal, m, tnotes)
                     if cash > req_liquidity:
@@ -356,6 +355,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         "description": "T-Note MTM",
                     })
 
+            tnote_position = sum(amount for _, (_, amount, _) in tnotes.items())
             current_nav = cash + (spy_position_size * day_spy) + tnote_position
             # If we ran out of money, stop the loop and let the remaining path
             # vector to be zero-filled.
