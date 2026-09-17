@@ -82,6 +82,51 @@ class AnnualTaxLaw:
     ltcg: BracketTable  # dollar thresholds only; the 0/15/20% structure lives in `brackets`
     niit: NIITRule
 
+    def compute_tax(self, ordinary_income: float, preferential_income: float) -> float:
+        """
+        Total federal tax owed for one calendar year.
+
+        Parameters:
+        -----------
+        ordinary_income : float
+            Taxed at `self.ordinary` marginal rates: interest (T-Bill accrual,
+            T-Note coupons) and short-term capital gains.
+        preferential_income : float
+            Taxed at `self.ltcg` rates, STACKED ON TOP of ordinary_income:
+            qualified dividends and long-term capital gains.
+
+        Simplifications (see linear_models.LongSPYWithTreasuryLadders):
+            - Single-filer thresholds only (NIIT threshold_single, no
+              married/HoH selection yet -- this engine has no filing-status
+              concept upstream).
+            - No wage income, so MAGI for NIIT purposes is taken to be
+              ordinary_income + preferential_income directly (nothing to
+              subtract or add back).
+            - The standard deduction is applied once, against ordinary_income
+              first; any unused deduction spills over to reduce
+              preferential_income before it stacks.
+        """
+        total_income = ordinary_income + preferential_income
+        deduction = self.ordinary.standard_deduction
+
+        ordinary_taxable = max(0.0, ordinary_income - deduction)
+        unused_deduction = max(0.0, deduction - ordinary_income)
+        preferential_taxable = max(0.0, preferential_income - unused_deduction)
+
+        ordinary_tax = self.ordinary.tax_on(ordinary_taxable)
+
+        # Preferential income stacks on top of ordinary taxable income, so its
+        # rate is read off the LTCG table between [ordinary_taxable,
+        # ordinary_taxable + preferential_taxable] -- not from zero.
+        stack_floor = ordinary_taxable
+        stack_ceiling = ordinary_taxable + preferential_taxable
+        preferential_tax = self.ltcg.tax_on(stack_ceiling) - self.ltcg.tax_on(stack_floor)
+
+        niit_threshold = self.niit.threshold_single
+        niit_tax = self.niit.rate * max(0.0, total_income - niit_threshold)
+
+        return ordinary_tax + preferential_tax + niit_tax
+
 
 # ---------------------------------------------------------------------------
 # 2026 baseline (IRS Rev. Proc. 2025-32), single filer.

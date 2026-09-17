@@ -12,10 +12,12 @@ import math
 
 from abc import ABC, abstractmethod
 from collections import deque
-from typing import Dict, List, Tuple, override
+from typing import Dict, List, Optional, Tuple, override
 
 import numpy as np
 import pandas as pd
+
+from tax_models.regimes import TaxRegimeScenario
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +167,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         ladder_allocation: float,
         yearly_spending: float,
         spy_avg_dividend_yield: float = 0.01,
+        tax_regime: Optional[TaxRegimeScenario] = None,
     ):
         if not math.isclose(equity_allocation + ladder_allocation, 1.0, abs_tol=1e-4):
             raise ValueError("Portfolio allocation must sum up to 100%")
@@ -173,8 +176,11 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.ladder_allocation = ladder_allocation
         self.yearly_spending = yearly_spending
         self.spy_div_yield = spy_avg_dividend_yield
+        self.tax_regime = tax_regime
         self.spy_lots = TaxLotTracker()
         self.realized_gains: List[Tuple[int, float, float]] = []
+        self.income_events: List[Tuple[int, float, float]] = []  # (month, ordinary, preferential)
+        self.tax_paid: List[Tuple[int, float]] = []  # (month, amount) -- reporting only
 
     @staticmethod
     def _get_needed_liquidity(
@@ -204,6 +210,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.book.clear()
         self.spy_lots = TaxLotTracker()
         self.realized_gains = []
+        self.income_events = []
+        self.tax_paid = []
         monthly_withdrawal = self.yearly_spending / 12.0
         spx_prices = spx / 10.0
         spy_price = spx_prices[0]
@@ -277,10 +285,62 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         cpi_pct.iloc[-1] = 0.0
 
         return_path = np.zeros(months)
+        ruined = False
+
+        # Running current-year totals feeding the tax computation, reset at
+        # every year boundary -- O(1) per event rather than rescanning the
+        # full income_events/realized_gains history each year-end.
+        ytd_ordinary_income = 0.0
+        ytd_preferential_income = 0.0
+        pending_tax_due = 0.0
 
         for m in range(months):
             day_spy = spx_prices[m]
             transaction_month = False
+
+            # Settle last year's tax bill, computed at that year's close and
+            # deferred to the first month of the following year. Deferring
+            # (rather than paying within the same year the liability was
+            # computed) avoids a circular dependency: any equity sale needed
+            # to cover the bill is itself a taxable event, which must land in
+            # a year whose liability hasn't been computed yet.
+            if pending_tax_due > 0.0:
+                tax_shortfall = pending_tax_due - cash
+                if tax_shortfall > 0:
+                    selling_position = math.ceil(tax_shortfall / day_spy)
+                    selling_position = min(selling_position, spy_position_size)
+                    if selling_position > 0:
+                        st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                        self.realized_gains.append((m, st_gain, lt_gain))
+                        ytd_ordinary_income += st_gain
+                        ytd_preferential_income += lt_gain
+                        if full_book:
+                            self.book.append({
+                                "month": m,
+                                "trade": "sell",
+                                "symbol": "SPY",
+                                "size": selling_position,
+                                "price": day_spy,
+                                "short_term_gain": st_gain,
+                                "long_term_gain": lt_gain,
+                                "description": "Selling equity to cover prior-year tax liability",
+                            })
+                            transaction_month = True
+                        spy_position_size -= selling_position
+                        cash += selling_position * day_spy
+
+                payment = min(pending_tax_due, cash)
+                cash -= payment
+                self.tax_paid.append((m, payment))
+                if full_book:
+                    self.book.append({
+                        "month": m,
+                        "trade": "tax",
+                        "price": -payment,
+                        "description": "Prior-year federal tax payment",
+                    })
+                    transaction_month = True
+                pending_tax_due = 0.0
 
             # Monthly withdrawal execution
             cash -= monthly_withdrawal
@@ -298,6 +358,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 cash_dividend = spy_position_size * day_spy * self.spy_div_yield / 4.0
                 if cash_dividend > 0:
                     cash += cash_dividend
+                    self.income_events.append((m, 0.0, cash_dividend))
+                    ytd_preferential_income += cash_dividend
                     if full_book:
                         self.book.append({
                             "month": m,
@@ -309,7 +371,10 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
 
             # Monthly T-Bill Yield Accrual
             tbill_monthly_return = yield3m[m] / 12.0
-            cash *= (1.0 + tbill_monthly_return)
+            tbill_interest = cash * tbill_monthly_return
+            cash += tbill_interest
+            self.income_events.append((m, tbill_interest, 0.0))
+            ytd_ordinary_income += tbill_interest
 
             # Semi-annual T-Note Coupon Distribution & Maturities (Every 6 months)
             expired_notes = []
@@ -318,6 +383,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 if months_remaining % 6 == 0 and m > 0:
                     tnote_coupon = amount * (rate / 2.0)
                     cash += tnote_coupon
+                    self.income_events.append((m, tnote_coupon, 0.0))
+                    ytd_ordinary_income += tnote_coupon
                     if full_book:
                         self.book.append({
                             "month": m,
@@ -360,6 +427,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         if selling_position > 0:
                             st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
                             self.realized_gains.append((m, st_gain, lt_gain))
+                            ytd_ordinary_income += st_gain
+                            ytd_preferential_income += lt_gain
                             if full_book:
                                 self.book.append({
                                     "month": m,
@@ -389,6 +458,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 if selling_position > 0:
                     st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
                     self.realized_gains.append((m, st_gain, lt_gain))
+                    ytd_ordinary_income += st_gain
+                    ytd_preferential_income += lt_gain
                     if full_book:
                         self.book.append({
                             "month": m,
@@ -461,14 +532,48 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         "description": "T-Note MTM",
                     })
 
+            # Year-End Tax Liability Computation
+            # Resolved using THIS path's own simulated CPI (not a population
+            # average), and deferred to next month's opening payment -- see
+            # the "Settle last year's tax bill" block at the top of the loop.
+            if self.tax_regime is not None and (m + 1) % 12 == 0:
+                year = m // 12
+                cpi_relative_to_start = cpi[m] / cpi[0]
+                law = self.tax_regime.resolve(year, cpi_relative_to_start)
+                pending_tax_due = law.compute_tax(ytd_ordinary_income, ytd_preferential_income)
+                if full_book:
+                    self.book.append({
+                        "month": m,
+                        "trade": "tax",
+                        "price": pending_tax_due,
+                        "description": f"Year {year} tax liability"
+                    })
+                    transaction_month = True
+                ytd_ordinary_income = 0.0
+                ytd_preferential_income = 0.0
+
             tnote_position = sum(amount for _, (_, amount, _) in tnotes.items())
             current_nav = cash + (spy_position_size * day_spy) + tnote_position
             # If we ran out of money, stop the loop and let the remaining path
             # vector to be zero-filled.
             if current_nav <= 0:
+                ruined = True
                 break
 
             return_path[m] = current_nav
+
+        if not ruined:
+            # Simulation completed its full horizon -- settle whatever's left
+            # of the final year's tax bill out of remaining cash. No further
+            # months exist to fund an equity sale for this one, so it's a
+            # best-effort payment rather than the deferred-sale mechanism
+            # used mid-simulation; over a multi-decade horizon this is at
+            # most one year's liability applied a little early/incomplete.
+            if pending_tax_due > 0.0:
+                payment = min(pending_tax_due, cash)
+                cash -= payment
+                self.tax_paid.append((months, payment))
+                return_path[-1] -= payment
 
         return return_path
 
