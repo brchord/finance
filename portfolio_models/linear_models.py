@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple, override
 import numpy as np
 import pandas as pd
 
-from tax_models.regimes import TaxRegimeScenario
+from tax_models.regimes import TaxRegimeScenario, build_tax_regime
 
 logger = logging.getLogger(__name__)
 
@@ -604,4 +604,5 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             float(o["ladder_allocation"]),
             float(o["yearly_spending"]),
             float(o.get("dividend_yield", 0.01)),
+            tax_regime=build_tax_regime(o.get("tax_regime", "none")),
         )

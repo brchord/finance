@@ -10,5 +10,6 @@
     "retirement_age": 42,
     "total_paths": 500,
     "models": ["HybridValuationVARSimulator", "RegimeSwitchingValuationVARSimulator"],
+    "tax_regimes": ["none", "current_law_indexed", "historical_average_drift", "pre_tcja_reversion"],
     "workers": 20
 }

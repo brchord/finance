@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Tuple, override
+from typing import Optional, Tuple, override
 
 @dataclass(frozen=True)
 class BracketTable:
@@ -302,3 +302,42 @@ PRE_TCJA_STYLE_SINGLE = AnnualTaxLaw(
     ),
     niit=NIITRule(rate=0.038, threshold_single=200_000, threshold_joint=250_000, indexed=False),
 )
+
+
+# ---------------------------------------------------------------------------
+# Config-facing registry, selected by name from portfolio JSON ("tax_regime").
+# Deliberately NOT a name->class map like monte_carlo.SUPPORTED_MODELS/
+# model_map: TaxRegimeScenario subclasses aren't zero-arg constructible (they
+# need a baseline law, and two of them need drift/switch parameters), so this
+# is a name->factory-function map instead. Each call returns a fresh
+# instance -- cheap, since these are stateless wrappers around resolve() --
+# so callers never need to worry about sharing one across portfolios/workers.
+# ---------------------------------------------------------------------------
+
+def build_tax_regime(name: str) -> Optional[TaxRegimeScenario]:
+    """Builds a named TaxRegimeScenario for config-driven sweeps. "none" (or
+    an unset/omitted config field) means untaxed, returning None."""
+
+    if name is None or name == "none":
+        return None
+
+    if name == "current_law_indexed":
+        return CurrentLawIndexed("current_law_indexed", BASELINE_2026_SINGLE)
+
+    if name == "historical_average_drift":
+        return HistoricalAverageDrift(
+            "historical_average_drift", BASELINE_2026_SINGLE,
+            target_top_rate=0.396, drift_years=15,
+        )
+
+    if name == "pre_tcja_reversion":
+        return RegimeSwitchAtYear(
+            "pre_tcja_reversion", BASELINE_2026_SINGLE,
+            switch_year=10, alternate_law=PRE_TCJA_STYLE_SINGLE,
+        )
+
+    raise ValueError(
+        f"Unknown tax_regime '{name}'. Supported: "
+        "none, current_law_indexed, historical_average_drift, pre_tcja_reversion"
+    )
+
