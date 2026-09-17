@@ -174,7 +174,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.yearly_spending = yearly_spending
         self.spy_div_yield = spy_avg_dividend_yield
         self.spy_lots = TaxLotTracker()
-        self.realized_gains: List[Dict] = []
+        self.realized_gains: List[Tuple[int, float, float]] = []
 
     @staticmethod
     def _get_needed_liquidity(
@@ -202,6 +202,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         full_book: bool = False,
     ) -> np.ndarray:
         self.book.clear()
+        self.spy_lots = TaxLotTracker()
+        self.realized_gains = []
         monthly_withdrawal = self.yearly_spending / 12.0
         spx_prices = spx / 10.0
         spy_price = spx_prices[0]
