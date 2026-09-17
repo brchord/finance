@@ -9,13 +9,106 @@ Long SP500 with Treasuries ladders (Bills and Notes).
 
 import logging
 import math
+
 from abc import ABC, abstractmethod
+from collections import deque
 from typing import Dict, List, Tuple, override
 
 import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+class TaxLotTracker:
+    """
+    FIFO tax lot tracker for a single security within one simulated path.
+
+    Tracks purchase lots (shares, cost basis per share, purchase month) and,
+    on each sale, consumes the oldest lots first, splitting the realized gain
+    into short-term and long-term based on a holding-period threshold.
+
+    This intentionally only tracks *realized* gains -- unrealized gains on
+    remaining lots are not taxable events and are left alone.
+    """
+
+    # Approximation: IRS long-term treatment requires holding for MORE than
+    # 1 year (i.e. 366+ days). Since this engine steps monthly, "more than
+    # 12 whole months held" is the closest we can resolve; a lot sold in
+    # exactly its 12th month after purchase is treated as short-term here,
+    # which is slightly conservative (biases toward the higher-tax bucket).
+    LONG_TERM_HOLDING_MONTHS = 12
+
+    # Below this share count a lot is considered fully consumed. Guards
+    # against float accumulation leaving a lot "open" with ~1e-13 shares.
+    _EPSILON_SHARES = 1e-9
+
+    def __init__(self):
+        # each: [shares_remaining, cost_basis_per_share, purchase_month]
+        self.lots: deque[list] = deque()
+        self.realized_short_term_gain: float = 0.0
+        self.realized_long_term_gain: float = 0.0
+
+    def buy(self, shares: float, price: float, month: int) -> None:
+        """Opens a new lot. No-op for non-positive share counts."""
+        if shares <= 0:
+            return
+        self.lots.append([float(shares), float(price), int(month)])
+
+    def sell(self, shares_to_sell: float, price: float, month: int) -> Tuple[float, float]:
+        """
+        Consumes lots oldest-first to cover a sale of `shares_to_sell` at `price`.
+
+        Returns:
+        --------
+        (short_term_gain, long_term_gain) : Tuple[float, float]
+            Realized gain (can be negative, i.e. a loss) attributable to this
+            single sale, split by holding-period bucket. Also accumulated
+            into self.realized_short_term_gain / self.realized_long_term_gain.
+        """
+        remaining = float(shares_to_sell)
+        st_gain = 0.0
+        lt_gain = 0.0
+
+        while remaining > self._EPSILON_SHARES and self.lots:
+            lot = self.lots[0]
+            lot_shares, lot_basis, lot_month = lot
+            consumed = min(remaining, lot_shares)
+            gain = consumed * (price - lot_basis)
+
+            if (month - lot_month) >= self.LONG_TERM_HOLDING_MONTHS:
+                lt_gain += gain
+            else:
+                st_gain += gain
+
+            lot[0] -= consumed
+            remaining -= consumed
+            if lot[0] <= self._EPSILON_SHARES:
+                self.lots.popleft()
+
+        if remaining > self._EPSILON_SHARES:
+            # Selling more shares than we have lots for is a bug upstream
+            # (e.g. spy_position_size and the tracker have drifted apart).
+            raise RuntimeError(
+                f"TaxLotTracker: tried to sell {shares_to_sell} shares at month "
+                f"{month} but only {shares_to_sell - remaining} were covered by open lots."
+            )
+
+        self.realized_short_term_gain += st_gain
+        self.realized_long_term_gain += lt_gain
+        return st_gain, lt_gain
+
+    def total_shares_held(self) -> float:
+        """Total open shares across all remaining lots (should match position size)."""
+        return sum(lot[0] for lot in self.lots)
+
+    def average_cost_basis(self) -> float:
+        """Share-weighted average cost basis across currently open lots (0 if none open)."""
+        total_shares = self.total_shares_held()
+        if total_shares <= self._EPSILON_SHARES:
+            return 0.0
+        return sum(lot[0] * lot[1] for lot in self.lots) / total_shares
+
 
 class InvestmentStrategy(ABC):
     """
@@ -80,6 +173,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.ladder_allocation = ladder_allocation
         self.yearly_spending = yearly_spending
         self.spy_div_yield = spy_avg_dividend_yield
+        self.spy_lots = TaxLotTracker()
+        self.realized_gains: List[Dict] = []
 
     @staticmethod
     def _get_needed_liquidity(
@@ -112,6 +207,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         spy_price = spx_prices[0]
 
         spy_position_size = math.ceil(initial_nav * self.equity_allocation / spy_price)
+        self.spy_lots.buy(spy_position_size, spy_price, 0)
         tnote_amount = initial_nav * self.ladder_allocation / 5.0
 
         # Note maturities expressed in months: 2Y=24m, 3Y=36m, 5Y=60m
@@ -260,6 +356,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                         selling_position = math.floor(amount_to_sell / day_spy)
                         selling_position = min(selling_position, spy_position_size)
                         if selling_position > 0:
+                            st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                            self.realized_gains.append((m, st_gain, lt_gain))
                             if full_book:
                                 self.book.append({
                                     "month": m,
@@ -267,6 +365,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                                     "symbol": "SPY",
                                     "size": selling_position,
                                     "price": day_spy,
+                                    "short_term_gain": st_gain,
+                                    "long_term_gain": lt_gain,
                                     "description": "Portfolio rebalance to replenish fixed income",
                                 })
                                 transaction_month = True
@@ -285,12 +385,16 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 selling_position = math.ceil(-current_runway / day_spy)
                 selling_position = min(selling_position, spy_position_size)
                 if selling_position > 0:
+                    st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                    self.realized_gains.append((m, st_gain, lt_gain))
                     if full_book:
                         self.book.append({
                             "month": m,
                             "trade": "sell",
                             "price": day_spy,
                             "size": selling_position,
+                            "short_term_gain": st_gain,
+                            "long_term_gain": lt_gain,
                             "description": "Selling equity shares to restore cash runway",
                         })
                         transaction_month = True
@@ -365,6 +469,23 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             return_path[m] = current_nav
 
         return return_path
+
+    def annual_realized_gains(self) -> Dict[int, tuple[float, float]]:
+        """
+        Rolls up self.realized_gains (one entry per sale) into calendar-year
+        totals, keyed by simulation year (0-indexed: months 0-11 -> year 0).
+
+        Returns:
+        --------
+        Dict[int, tuple[float, float]]
+            Only years with at least one sale are present.
+        """
+        annual: Dict[int, tuple[float, float]] = {}
+        for month, st_gain, lt_gain in self.realized_gains:
+            year = month // 12
+            t = annual.setdefault(year, (0.0, 0.0))
+            annual[year] = (t[0] + st_gain, t[1] + lt_gain)
+        return annual
 
     @classmethod
     def from_json_object(cls, o: dict):
