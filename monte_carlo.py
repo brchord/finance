@@ -199,7 +199,7 @@ class MonteCarloCLI:
     Class encapsulating the Command Line Interface functionality for
     kicking off Monte Carlo simulations using this sofware package.
     """
-    SUPPORTED_MODELS = [
+    SUPPORTED_MODELS: list[type[ps.PathSimulator]] = [
                 ps.HybridValuationVARSimulator,
                 ps.RawBlockBootstrapSimulator,
                 ps.RegimeSwitchingBootstrapSimulator,
@@ -242,9 +242,9 @@ class MonteCarloCLI:
                      years_to_simulate: float = 35.0,
                      retirement_age: float = 65.0,
                      total_paths: int = 10_000,
-                     n_workers: int = os.cpu_count(),
+                     n_workers: Optional[int] = os.cpu_count(),
                      models: list[str],
-                     tax_regimes: list[str] = None,
+                     tax_regimes: Optional[list[str]] = None,
                      master_seed: Optional[int] = None):
             self.yearly_low = yearly_spending_floor
             self.yearly_top = yearly_spending_ceil
@@ -470,8 +470,9 @@ class MonteCarloCLI:
             run_stats["results"][m] = []
             for sim in r:
                 yearly_spending = sim["spending"]
-                allocation_str = f"{sim["equity"]*100.0:02.0f}-" + \
-                                 f"{sim["ladder"]*100.0:02.0f}"
+                allocation_str = (
+                    f"{sim["equity"]*100.0:02.0f}-"
+                    f"{sim["ladder"]*100.0:02.0f}")
                 df_data = pd.DataFrame(sim["results"])
                 df_data["Returns"] = (
                     (df_data["Terminal NAV"] - initial_nav)

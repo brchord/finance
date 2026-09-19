@@ -15,7 +15,7 @@ class DynamicSVI:
     equities markets.
     """
 
-    def __init__(self, strikes_market: np.array, iv_market: np.array,
+    def __init__(self, strikes_market: np.ndarray, iv_market: np.ndarray,
                  spot_price: float, yearly_exp: float):
         """
         Initializes Dynamic Surface Volatility Interpolation
@@ -34,12 +34,12 @@ class DynamicSVI:
         self.shape_constant = self.b * (
             -self.rho * self.m + np.sqrt(self.m**2 + self.sigma**2))
 
-    def _fit_svi(self, k_market: list[float], iv_market: list[float],
+    def _fit_svi(self, k_market: np.ndarray, iv_market: np.ndarray,
                  exp: float, initial_guess=None):
         w_market = (iv_market ** 2) * exp
 
-        def svi_total_variance(params: tuple[float, float, float, float],
-                               k: float):
+        def svi_total_variance(params: tuple[float, float, float, float, float],
+                               k: np.ndarray):
             a, b, rho, m, sigma = params
             return a + b * (rho * (k - m) + np.sqrt((k - m)**2 + sigma**2))
 
@@ -65,7 +65,7 @@ class DynamicSVI:
             objective, initial_guess, method='L-BFGS-B', bounds=bounds)
         return result.x
 
-    def get_iv_curve(self, atm_iv: float, strikes: list[float],
+    def get_iv_curve(self, atm_iv: float, strikes: np.ndarray,
                      forward: float, current_exp: float):
         """
         Extrapolates the full OTM IV curve given an ATM IV and the

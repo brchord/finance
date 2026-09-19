@@ -21,6 +21,7 @@ import urllib.request
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from typing import Any
 from urllib.parse import urlencode
 
 import numpy as np
@@ -101,7 +102,7 @@ class IBKRSPXMarketData:
             logging.error("Network / Gateway Connection Error: %s", e.reason)
             return {}
 
-    def _get_historical_data(self, conid: str, end_date: date,
+    def _get_historical_data(self, conid: int, end_date: date,
                              period="1y", candle_size="1d") -> dict:
         """
         Retrieves a year historical daily candle price data
@@ -114,7 +115,8 @@ class IBKRSPXMarketData:
         # Define query parameters
         end_date_str = f"{end_date.year}{end_date.month:02d}{end_date.day:02d}"
 
-        query_params = copy.deepcopy(IBKRSPXMarketData.BASE_QUERY_PARAMS)
+        query_params: dict[str, Any] = copy.deepcopy(
+            IBKRSPXMarketData.BASE_QUERY_PARAMS)
         query_params["conId"] = conid
         query_params["period"] = period
         query_params["bar"] = candle_size
@@ -122,8 +124,9 @@ class IBKRSPXMarketData:
 
         # Encode into a query string
         query_string = urlencode(query_params)
-        endpoint_url = f"{IBKRSPXMarketData.HIST_DATA_ENDPOINT}?" + \
-                       f"{query_string}-00:00:00"
+        endpoint_url = (
+            f"{IBKRSPXMarketData.HIST_DATA_ENDPOINT}?"
+            f"{query_string}-00:00:00")
         return self._get_request(endpoint_url)
 
     def _initialize_spx(self):
@@ -203,13 +206,15 @@ class IBKRSPXMarketData:
         querying the desired field IDs.
         """
         query_string = f"conids={",".join(conids)}&fields={",".join(fields)}"
-        api_url = f"{IBKRSPXMarketData.LIVE_MARKET_DATA_ENDPOINT}" + \
-                  f"?{query_string}"
+        api_url = (
+            f"{IBKRSPXMarketData.LIVE_MARKET_DATA_ENDPOINT}"
+            f"?{query_string}")
         data = self._get_request(api_url)
         return data
 
     def _get_strikes_per_maturity(
-            self, spx_spot, maturity, option_type="call") -> dict[int, str]:
+            self, spx_spot, maturity, option_type="call"
+    ) -> tuple[str, dict[float, str]]:
         spx_low = spx_spot * (1 - IBKRSPXMarketData.DIST_FROM_SPOT)
         spx_low = math.floor(spx_low / 100.0) * 100
         spx_hi = spx_spot
@@ -227,8 +232,9 @@ class IBKRSPXMarketData:
                 "right": "C" if option_type == "call" else "P"
             }
             query_string = urlencode(query_params)
-            strike_check_url = f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}" + \
-                               f"?{query_string}"
+            strike_check_url = (
+                f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}"
+                f"?{query_string}")
             opt_contracts = self._get_request(strike_check_url)
             monthlies = [
                 c for c in opt_contracts if c["tradingClass"] == "SPX"]
@@ -241,7 +247,8 @@ class IBKRSPXMarketData:
         return list(expiration_set)[0], option_contract_map
 
     def _get_strike_contracts(
-            self, spx_spot, option_type="call") -> dict[int, str]:
+            self, spx_spot, option_type="call"
+    ) -> dict[str, tuple[str, dict[float, str]]]:
         opt_contract_data = [x for x in self.spx_contract_data[0]["sections"]
                              if x["secType"] == "OPT"]
         opt_maturities = opt_contract_data[0]["months"].split(";")[1:4]
@@ -268,7 +275,8 @@ class IBKRSPXMarketData:
         return options_chain
 
     def spx_current_option_iv_surface(
-            self, option_type="call") -> dict[str, list[tuple[float, str]]]:
+            self, option_type="call"
+    ) -> tuple[float, float, dict[str, list[tuple[float, str]]]]:
         """
         Retrieves the IV smile from the closest monthly SPX options
         chain.
@@ -416,8 +424,8 @@ def main():
             logging.error("Invalid option type: '%s'", option_type)
             sys.exit(1)
 
-        spx, vix, options_chain = \
-            ibkr.spx_current_option_iv_surface(option_type=option_type)
+        spx, vix, options_chain = ibkr.spx_current_option_iv_surface(
+            option_type=option_type)
         with open(args.output_file, "w", encoding="utf-8") as f:
             json.dump({"spot_spx": spx,
                        "spot_vix": vix,

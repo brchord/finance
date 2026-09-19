@@ -3,6 +3,8 @@ Stochastic Volatility with Correlated Jumps
 Time Series Simulation
 """
 
+from typing import Optional
+
 import numpy as np
 
 
@@ -155,7 +157,7 @@ class SVCJSimulation:
         self,
         trading_days: int = 252,
         num_paths: int = 10000,
-        seed: int = None
+        seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Generates simulated price, spot VIX (30-day), and VIX3M trajectories.
