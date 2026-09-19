@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = ["^\\.venv/", "^tests/"]
