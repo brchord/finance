@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    # fastparquet on NumPy 2.x; out of our hands
+    "ignore:The 'generic' unit for NumPy timedelta:DeprecationWarning",
+]
 
 [tool.mypy]
 ignore_missing_imports = true
