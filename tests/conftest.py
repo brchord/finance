@@ -37,3 +37,11 @@ def market_cache(tmp_path_factory):
     path = tmp_path_factory.mktemp("market") / "market.parquet"
     make_market_levels().to_parquet(path)
     return path
+
+
+@pytest.fixture(scope="session")
+def aligned_market(market_cache):
+    """(levels, returns) exactly as the CLI builds them from a cache file."""
+    from market_data.yf_fred_market_data import MarketDataManager
+    return MarketDataManager(
+        cache_filepath=str(market_cache)).get_aligned_real_returns()
