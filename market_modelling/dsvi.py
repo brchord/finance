@@ -5,6 +5,7 @@ Dynamic Stochastic Volatility Interpolation.
 import numpy as np
 from scipy.optimize import minimize
 
+
 class DynamicSVI:
     """
     Dynamic Stochastic Volatility Interpolation
@@ -13,6 +14,7 @@ class DynamicSVI:
     model fitted using real volatility smirks observed in actual
     equities markets.
     """
+
     def __init__(self, strikes_market: np.array, iv_market: np.array,
                  spot_price: float, yearly_exp: float):
         """
@@ -27,9 +29,10 @@ class DynamicSVI:
         k_market = np.log(strikes_market / spot_price)
         self.a0, self.b, self.rho, self.m, self.sigma = self._fit_svi(
             k_market, iv_market, yearly_exp)
-        # Precompute the shape constant C (contribution of shape to ATM variance)
-        self.shape_constant = self.b * (-self.rho * self.m + np.sqrt(self.m**2 + self.sigma**2))
-
+        # Precompute the shape constant C (contribution of shape to
+        # ATM variance).
+        self.shape_constant = self.b * (
+            -self.rho * self.m + np.sqrt(self.m**2 + self.sigma**2))
 
     def _fit_svi(self, k_market: list[float], iv_market: list[float],
                  exp: float, initial_guess=None):
@@ -58,7 +61,8 @@ class DynamicSVI:
             (1e-4, np.inf)
         ]
 
-        result = minimize(objective, initial_guess, method='L-BFGS-B', bounds=bounds)
+        result = minimize(
+            objective, initial_guess, method='L-BFGS-B', bounds=bounds)
         return result.x
 
     def get_iv_curve(self, atm_iv: float, strikes: list[float],
@@ -77,7 +81,8 @@ class DynamicSVI:
         k = np.log(strikes / forward)
 
         # 4. Evaluate Raw SVI total variance
-        w_t = a_t + self.b * (self.rho * (k - self.m) + np.sqrt((k - self.m)**2 + self.sigma**2))
+        w_t = a_t + self.b * (
+            self.rho * (k - self.m) + np.sqrt((k - self.m)**2 + self.sigma**2))
 
         # 5. Convert back to implied volatility using the current expiration
         iv_curve = np.sqrt(np.maximum(w_t, 1e-8) / current_exp)

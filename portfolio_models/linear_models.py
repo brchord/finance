@@ -57,9 +57,11 @@ class TaxLotTracker:
             return
         self.lots.append([float(shares), float(price), int(month)])
 
-    def sell(self, shares_to_sell: float, price: float, month: int) -> Tuple[float, float]:
+    def sell(self, shares_to_sell: float,
+             price: float, month: int) -> Tuple[float, float]:
         """
-        Consumes lots oldest-first to cover a sale of `shares_to_sell` at `price`.
+        Consumes lots oldest-first to cover a sale of `shares_to_sell`
+        at `price`.
 
         Returns:
         --------
@@ -92,20 +94,26 @@ class TaxLotTracker:
             # Selling more shares than we have lots for is a bug upstream
             # (e.g. spy_position_size and the tracker have drifted apart).
             raise RuntimeError(
-                f"TaxLotTracker: tried to sell {shares_to_sell} shares at month "
-                f"{month} but only {shares_to_sell - remaining} were covered by open lots."
-            )
+                f"TaxLotTracker: tried to sell {shares_to_sell} shares at "
+                f"month {month} but only {shares_to_sell - remaining} were "
+                f"covered by open lots.")
 
         self.realized_short_term_gain += st_gain
         self.realized_long_term_gain += lt_gain
         return st_gain, lt_gain
 
     def total_shares_held(self) -> float:
-        """Total open shares across all remaining lots (should match position size)."""
+        """
+        Total open shares across all remaining lots (should match position
+        size).
+        """
         return sum(lot[0] for lot in self.lots)
 
     def average_cost_basis(self) -> float:
-        """Share-weighted average cost basis across currently open lots (0 if none open)."""
+        """
+        Share-weighted average cost basis across currently open lots
+        (0 if none open).
+        """
         total_shares = self.total_shares_held()
         if total_shares <= self._EPSILON_SHARES:
             return 0.0
@@ -115,7 +123,8 @@ class TaxLotTracker:
 class InvestmentStrategy(ABC):
     """
     Abstract class representing a generic investment strategy.
-    Designed to be inherited by classes representing different investment strategies.
+    Designed to be inherited by classes representing different investment
+    strategies.
     """
 
     def __init__(self):
@@ -131,17 +140,18 @@ class InvestmentStrategy(ABC):
     def run_simulation(
         self,
         *,
-        spx: np.ndarray,         # SPX monthly time series
-        cpi: np.ndarray,         # CPI monthly pct changes
-        yield3m: np.ndarray,     # 3M T-Bill yield
-        yield5y: np.ndarray,     # 5Y T-Note yield
-        initial_nav: float,      # Initial NAV
-        months: int,             # Total months to run the simulation
-        full_book: bool = False, # Track full transaction book for debugging
+        spx: np.ndarray,          # SPX monthly time series
+        cpi: np.ndarray,          # CPI monthly pct changes
+        yield3m: np.ndarray,      # 3M T-Bill yield
+        yield5y: np.ndarray,      # 5Y T-Note yield
+        initial_nav: float,       # Initial NAV
+        months: int,              # Total months to run the simulation
+        full_book: bool = False,  # Track full transaction book for debugging
     ) -> np.ndarray:
         """
         Starts the investment portfolio simulation on a monthly time step.
-        returns: Time series array (length = months) representing monthly NAV progression.
+        returns: Time series array (length = months) representing monthly
+                 NAV progression.
         """
         return np.full(months, initial_nav)
 
@@ -152,7 +162,8 @@ class InvestmentStrategy(ABC):
 
 class LongSPYWithTreasuryLadders(InvestmentStrategy):
     """
-    Simulates a portfolio comprised of a long SPY sleeve and a fixed income T-Bill/T-Note ladder:
+    Simulates a portfolio comprised of a long SPY sleeve and a fixed income
+    T-Bill/T-Note ladder:
         - Short-term T-Bills (Cash buffer)
         - 2-year T-Note (24 months)
         - 3-year T-Note (36 months)
@@ -169,7 +180,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         spy_avg_dividend_yield: float = 0.01,
         tax_regime: Optional[TaxRegimeScenario] = None,
     ):
-        if not math.isclose(equity_allocation + ladder_allocation, 1.0, abs_tol=1e-4):
+        if not math.isclose(equity_allocation + ladder_allocation,
+                            1.0, abs_tol=1e-4):
             raise ValueError("Portfolio allocation must sum up to 100%")
         super().__init__()
         self.equity_allocation = equity_allocation
@@ -179,8 +191,10 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         self.tax_regime = tax_regime
         self.spy_lots = TaxLotTracker()
         self.realized_gains: List[Tuple[int, float, float]] = []
-        self.income_events: List[Tuple[int, float, float]] = []  # (month, ordinary, preferential)
-        self.tax_paid: List[Tuple[int, float]] = []  # (month, amount) -- reporting only
+        # (month, ordinary, preferential)
+        self.income_events: List[Tuple[int, float, float]] = []
+        # (month, amount) -- reporting only
+        self.tax_paid: List[Tuple[int, float]] = []
 
     @staticmethod
     def _get_needed_liquidity(
@@ -216,7 +230,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         spx_prices = spx / 10.0
         spy_price = spx_prices[0]
 
-        spy_position_size = math.ceil(initial_nav * self.equity_allocation / spy_price)
+        spy_position_size = math.ceil(
+            initial_nav * self.equity_allocation / spy_price)
         self.spy_lots.buy(spy_position_size, spy_price, 0)
         tnote_amount = initial_nav * self.ladder_allocation / 5.0
 
@@ -227,7 +242,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             2: (60, tnote_amount, yield5y[0]),
         }
         tnote_id = 3
-        cash = initial_nav - (tnote_amount * 4) - (spy_price * spy_position_size)
+        cash = (initial_nav - (tnote_amount * 4) -
+                (spy_price * spy_position_size))
 
         if full_book:
             self.book.append({
@@ -237,7 +253,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 "price": spy_price,
                 "size": spy_position_size,
                 "total": spy_price * spy_position_size,
-                "description": f"Initial long equity at {self.equity_allocation * 100.0}%",
+                "description": f"Initial long equity at "
+                               f"{self.equity_allocation * 100.0}%",
             })
             self.book.append({
                 "month": 0,
@@ -276,7 +293,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
 
         spx_series = pd.Series(spx_prices)
         # Mapped technical indicators from daily to monthly equivalents:
-        # EMA-30 days ~ EMA-1.5 months; SMA-90 days ~ SMA-4 months; SMA-180 days ~ SMA-9 months
+        # EMA-30 days ~ EMA-1.5 months; SMA-90 days ~ SMA-4 months; SMA-180
+        # days ~ SMA-9 months.
         sma2 = spx_series.rolling(window=2, min_periods=1).mean().values
         sma4 = spx_series.rolling(window=4, min_periods=1).mean().values
         sma9 = spx_series.rolling(window=9, min_periods=1).mean().values
@@ -310,7 +328,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                     selling_position = math.ceil(tax_shortfall / day_spy)
                     selling_position = min(selling_position, spy_position_size)
                     if selling_position > 0:
-                        st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                        st_gain, lt_gain = self.spy_lots.sell(
+                            selling_position, day_spy, m)
                         self.realized_gains.append((m, st_gain, lt_gain))
                         ytd_ordinary_income += st_gain
                         ytd_preferential_income += lt_gain
@@ -323,7 +342,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                                 "price": day_spy,
                                 "short_term_gain": st_gain,
                                 "long_term_gain": lt_gain,
-                                "description": "Selling equity to cover prior-year tax liability",
+                                "description": "Selling equity to cover "
+                                               "prior-year tax liability",
                             })
                             transaction_month = True
                         spy_position_size -= selling_position
@@ -355,7 +375,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
 
             # Quarterly SPY Dividend Payment (Every 3 months)
             if m % 3 == 0 and m > 0:
-                cash_dividend = spy_position_size * day_spy * self.spy_div_yield / 4.0
+                cash_dividend = (spy_position_size * day_spy *
+                                 self.spy_div_yield / 4.0)
                 if cash_dividend > 0:
                     cash += cash_dividend
                     self.income_events.append((m, 0.0, cash_dividend))
@@ -376,7 +397,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             self.income_events.append((m, tbill_interest, 0.0))
             ytd_ordinary_income += tbill_interest
 
-            # Semi-annual T-Note Coupon Distribution & Maturities (Every 6 months)
+            # Semi-annual T-Note Coupon Distribution & Maturities
+            # (Every 6 months).
             expired_notes = []
             for idx, (maturity_m, amount, rate) in tnotes.items():
                 months_remaining = maturity_m - m
@@ -410,22 +432,29 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                     })
                     transaction_month = True
 
-            tnote_position = sum(amount for _, (_, amount, _) in tnotes.items())
+            tnote_position = sum(
+                amount for _, (_, amount, _) in tnotes.items())
             current_nav = cash + (spy_position_size * day_spy) + tnote_position
             fixed_income_position = cash + tnote_position
 
             # Strategic Equity Rebalancing into Fixed Income
-            if fixed_income_position / current_nav <= self.ladder_allocation * 0.8:
-                if m >= 9 and day_spy >= sma2[m] and day_spy >= sma4[m] and day_spy >= sma9[m]:
-                    needed_amount = (current_nav * self.ladder_allocation) - fixed_income_position
-                    req_liquidity = self._get_needed_liquidity(monthly_withdrawal, m, tnotes)
+            if (fixed_income_position / current_nav
+               <= self.ladder_allocation * 0.8):
+                if (m >= 9 and day_spy >= sma2[m] and day_spy >= sma4[m]
+                   and day_spy >= sma9[m]):
+                    needed_amount = ((current_nav * self.ladder_allocation) -
+                                     fixed_income_position)
+                    req_liquidity = self._get_needed_liquidity(
+                        monthly_withdrawal, m, tnotes)
                     if cash > req_liquidity:
                         extra_liquidity = cash - req_liquidity
                         amount_to_sell = min(needed_amount, extra_liquidity)
                         selling_position = math.floor(amount_to_sell / day_spy)
-                        selling_position = min(selling_position, spy_position_size)
+                        selling_position = min(
+                            selling_position, spy_position_size)
                         if selling_position > 0:
-                            st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                            st_gain, lt_gain = self.spy_lots.sell(
+                                selling_position, day_spy, m)
                             self.realized_gains.append((m, st_gain, lt_gain))
                             ytd_ordinary_income += st_gain
                             ytd_preferential_income += lt_gain
@@ -438,17 +467,22 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                                     "price": day_spy,
                                     "short_term_gain": st_gain,
                                     "long_term_gain": lt_gain,
-                                    "description": "Portfolio rebalance to replenish fixed income",
+                                    "description": "Portfolio rebalance to "
+                                                   "replenish fixed income",
                                 })
                                 transaction_month = True
                             spy_position_size -= selling_position
                             cash += selling_position * day_spy
 
-            # Reserve Deficit Protection (Sell Equity if Cash Runway < Threshold)
-            req_liquidity = self._get_needed_liquidity(monthly_withdrawal, m, tnotes)
-            div_events_expected = math.floor(req_liquidity / monthly_withdrawal / 3.0)
-            expected_dividends = spy_position_size * spy_price * self.spy_div_yield * \
-                (div_events_expected / 4.0)
+            # Reserve Deficit Protection
+            # (Sell Equity if Cash Runway < Threshold).
+            req_liquidity = self._get_needed_liquidity(
+                monthly_withdrawal, m, tnotes)
+            div_events_expected = math.floor(
+                req_liquidity / monthly_withdrawal / 3.0)
+            expected_dividends = (spy_position_size * spy_price *
+                                  self.spy_div_yield *
+                                  (div_events_expected / 4.0))
             spending_needs = req_liquidity - expected_dividends
             current_runway = cash - spending_needs
 
@@ -456,7 +490,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 selling_position = math.ceil(-current_runway / day_spy)
                 selling_position = min(selling_position, spy_position_size)
                 if selling_position > 0:
-                    st_gain, lt_gain = self.spy_lots.sell(selling_position, day_spy, m)
+                    st_gain, lt_gain = self.spy_lots.sell(
+                        selling_position, day_spy, m)
                     self.realized_gains.append((m, st_gain, lt_gain))
                     ytd_ordinary_income += st_gain
                     ytd_preferential_income += lt_gain
@@ -468,7 +503,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                             "size": selling_position,
                             "short_term_gain": st_gain,
                             "long_term_gain": lt_gain,
-                            "description": "Selling equity shares to restore cash runway",
+                            "description": "Selling equity shares to restore "
+                                           "cash runway",
                         })
                         transaction_month = True
                     spy_position_size -= selling_position
@@ -478,25 +514,30 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             if cash >= (2.0 * current_nav * self.ladder_allocation / 5.0):
                 tnote_maturity = 24
                 if len(tnotes) > 0:
-                    furthest_maturity = max(mat for _, (mat, _, _) in tnotes.items()) - m
+                    furthest_maturity = max(
+                        mat for _, (mat, _, _) in tnotes.items()) - m
                     for target_m in [24, 36, 60]:
                         if furthest_maturity < target_m:
                             tnote_maturity = target_m
                             break
 
                 tnote_tranche = current_nav * self.ladder_allocation / 5.0
-                if cash >= (tnote_tranche + spending_needs) and tnote_tranche > 0:
+                if (cash >= (tnote_tranche + spending_needs)
+                   and tnote_tranche > 0):
                     if full_book:
                         self.book.append({
                             "month": m,
                             "trade": "buy",
-                            "symbol": f"T-Note {int(tnote_maturity / 12)} Years",
+                            "symbol": f"T-Note {int(tnote_maturity / 12)} "
+                                      f"Years",
                             "price": tnote_tranche,
                             "rate": yield5y[m],
                             "description": "T-Note ladder replenishment",
                         })
                         transaction_month = True
-                    tnotes[tnote_id] = (m + tnote_maturity, tnote_tranche, yield5y[m])
+                    tnotes[tnote_id] = (m + tnote_maturity,
+                                        tnote_tranche,
+                                        yield5y[m])
                     tnote_id += 1
                     cash -= tnote_tranche
 
@@ -540,7 +581,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 year = m // 12
                 cpi_relative_to_start = cpi[m] / cpi[0]
                 law = self.tax_regime.resolve(year, cpi_relative_to_start)
-                pending_tax_due = law.compute_tax(ytd_ordinary_income, ytd_preferential_income)
+                pending_tax_due = law.compute_tax(
+                    ytd_ordinary_income, ytd_preferential_income)
                 if full_book:
                     self.book.append({
                         "month": m,
@@ -552,7 +594,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 ytd_ordinary_income = 0.0
                 ytd_preferential_income = 0.0
 
-            tnote_position = sum(amount for _, (_, amount, _) in tnotes.items())
+            tnote_position = sum(
+                amount for _, (_, amount, _) in tnotes.items())
             current_nav = cash + (spy_position_size * day_spy) + tnote_position
             # If we ran out of money, stop the loop and let the remaining path
             # vector to be zero-filled.

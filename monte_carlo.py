@@ -1,15 +1,15 @@
 """
 monte_carlo.py
 
-Orchestrates multi-process parallel Monte Carlo simulations for any InvestmentStrategy
-operating on monthly real-space path outputs from PathSimulator instances.
+Orchestrates multi-process parallel Monte Carlo simulations for any
+InvestmentStrategy operating on monthly real-space path outputs from
+PathSimulator instances.
 """
 
 import argparse
 import copy
 import json
 import logging
-import math
 import os
 import time
 
@@ -27,10 +27,12 @@ from market_modelling.path_simulation import PathSimulator
 
 logger = logging.getLogger(__name__)
 
+
 class MonteCarloEngine:
     """
-    Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy subclass.
-    Encapsulates execution, chunking, and metric extraction across worker processes.
+    Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy
+    subclass. Encapsulates execution, chunking, and metric extraction across
+    worker processes.
     """
 
     def __init__(
@@ -45,10 +47,11 @@ class MonteCarloEngine:
         Parameters:
         -----------
         strategy : InvestmentStrategy
-            Portfolio model implementing 
+            Portfolio model implementing
             `run_simulation(spx, yield3m, yield5y, initial_nav, months)`.
         simulator : PathSimulator
-            Fitted path simulation engine instance inheriting from PathSimulator.
+            Fitted path simulation engine instance inheriting from
+            PathSimulator.
         simulation_months : int, default=360 (30 years)
             Total monthly time horizon for each path simulation.
         initial_nav : float, default=1,000,000.0
@@ -72,30 +75,36 @@ class MonteCarloEngine:
         seed: int,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Static worker method executing a batch of paths inside an isolated process.
+        Static worker method executing a batch of paths inside an isolated
+        process.
 
         Returns:
         --------
         Tuple containing:
-            1. final_spx (np.ndarray): Terminal real SPX index levels (num_paths,).
+            1. final_spx (np.ndarray): Terminal real SPX index levels
+               (num_paths,).
             2. final_navs (np.ndarray): Terminal NAV values (num_paths,).
-            3. ruin_histogram (np.ndarray): For ruin paths, the histogram of the month where
-                                            ruin occurred (num_paths).
+            3. ruin_histogram (np.ndarray): For ruin paths, the histogram of
+                                            the month where ruin occurred
+                                            (num_paths).
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
         ruin_histogram = np.zeros(simulation_months)
 
         # Generate batch real wealth index paths via simulator interface
-        spx_paths, cpi_paths, tbill_paths, tnote_paths = path_simulator.simulate_paths(
+        paths = path_simulator.simulate_paths(
             simulation_months=simulation_months,
             num_paths=num_paths,
             seed=seed,
         )
 
+        spx_paths, cpi_paths, tbill_paths, tnote_paths = paths
+
         for i in range(num_paths):
             # Execute monthly strategy simulation
-            # (Note: sim_paths include starting point at idx 0, passing monthly steps 1:)
+            # (Note: sim_paths include starting point at idx 0, passing monthly
+            #  steps 1:).
             nav_paths = strategy.run_simulation(
                 spx=spx_paths[i, :],
                 cpi=cpi_paths[i, :],
@@ -114,12 +123,12 @@ class MonteCarloEngine:
 
         return final_spx, final_navs, ruin_histogram
 
-
     def run(
         self,
         *,
         total_paths: int,
-        n_workers: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n_workers: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Spawns and manages parallel execution across available CPU cores.
 
@@ -184,6 +193,7 @@ class MonteCarloEngine:
             full_ruin_histogram
         )
 
+
 class MonteCarloCLI:
     """
     Class encapsulating the Command Line Interface functionality for
@@ -207,7 +217,6 @@ class MonteCarloCLI:
         self.raw_results = None
         self.agg_results = None
 
-
     class MCConfig:
         """"
         Represents a Monte Carlo simulation configuration, useful to generate
@@ -223,20 +232,20 @@ class MonteCarloCLI:
         }
 
         def __init__(self, *,
-                    yearly_spending_floor: float = 150_000,
-                    yearly_spending_ceil: float = 300_000,
-                    starting_equity: float = 0.75,
-                    ending_equity: float = 1.00,
-                    weight_increments: float = 0.05,
-                    spend_increments: float = 5000.0,
-                    initial_nav: float = 1_000_000.0,
-                    years_to_simulate: float = 35.0,
-                    retirement_age: float = 65.0,
-                    total_paths: int = 10_000,
-                    n_workers: int = os.cpu_count(),
-                    models: list[str],
-                    tax_regimes: list[str] = None,
-                    master_seed: Optional[int] = None):
+                     yearly_spending_floor: float = 150_000,
+                     yearly_spending_ceil: float = 300_000,
+                     starting_equity: float = 0.75,
+                     ending_equity: float = 1.00,
+                     weight_increments: float = 0.05,
+                     spend_increments: float = 5000.0,
+                     initial_nav: float = 1_000_000.0,
+                     years_to_simulate: float = 35.0,
+                     retirement_age: float = 65.0,
+                     total_paths: int = 10_000,
+                     n_workers: int = os.cpu_count(),
+                     models: list[str],
+                     tax_regimes: list[str] = None,
+                     master_seed: Optional[int] = None):
             self.yearly_low = yearly_spending_floor
             self.yearly_top = yearly_spending_ceil
             self.equity_low = starting_equity
@@ -249,11 +258,15 @@ class MonteCarloCLI:
             self.total_paths = total_paths
             self.n_workers = n_workers
             self.models = models
-            self.tax_regimes = tax_regimes if tax_regimes is not None else ["none"]
+            self.tax_regimes = (
+                    tax_regimes if tax_regimes is not None else ["none"])
             self.master_seed = master_seed
 
         def _step_count(self, low, high, increment):
-            """Number of steps from low to high inclusive, given a fixed increment."""
+            """
+            Number of steps from low to high inclusive, given a fixed
+            increment.
+            """
             return int(round((high - low) / increment)) + 1
 
         def portfolio_configs(self):
@@ -269,15 +282,18 @@ class MonteCarloCLI:
             comparison is contaminated by full independent-sample noise
             on top of whatever the real tax effect is.
             """
-            n_equity = self._step_count(self.equity_low, self.equity_top, self.eq_increment)
-            n_yearly = self._step_count(self.yearly_low, self.yearly_top, self.spend_increment)
+            n_equity = self._step_count(
+                self.equity_low, self.equity_top, self.eq_increment)
+            n_yearly = self._step_count(
+                self.yearly_low, self.yearly_top, self.spend_increment)
 
             for model in self.models:
                 for i in range(n_equity):
                     equity = round(self.equity_low + i * self.eq_increment, 6)
                     fixed = round(1.0 - equity, 6)
                     for j in range(n_yearly):
-                        yearly = round(self.yearly_low + j * self.spend_increment, 2)
+                        yearly = round(
+                            self.yearly_low + j * self.spend_increment, 2)
                         for tax_regime in self.tax_regimes:
                             p = copy.deepcopy(self.PORTFOLIO_CONFIG_TEMPLATE)
                             p["equity_allocation"] = equity
@@ -288,11 +304,16 @@ class MonteCarloCLI:
                             yield p
 
         def total_portfolios(self):
-            """Returns the total count of portfolios generated by the given config."""
-            n_equity = self._step_count(self.equity_low, self.equity_top, self.eq_increment)
-            n_yearly = self._step_count(self.yearly_low, self.yearly_top, self.spend_increment)
-            return n_equity * n_yearly * len(self.models) * len(self.tax_regimes)
-
+            """
+            Returns the total count of portfolios generated by the given
+            config.
+            """
+            n_equity = self._step_count(
+                self.equity_low, self.equity_top, self.eq_increment)
+            n_yearly = self._step_count(
+                self.yearly_low, self.yearly_top, self.spend_increment)
+            return (n_equity * n_yearly *
+                    len(self.models) * len(self.tax_regimes))
 
     def _load_config(self):
         try:
@@ -314,13 +335,13 @@ class MonteCarloCLI:
                 tax_regimes=config.get("tax_regimes", ["none"]),
                 master_seed=config.get("master_seed"))
             logging.info("Loaded configuration: ")
-            kvs = [f"{k.replace('_', ' ').title()}: {v}" for k, v in config.items()]
+            kvs = [f"{k.replace('_', ' ').title()}: {v}"
+                   for k, v in config.items()]
             logging.info(" ".join(kvs))
             self.simulation_config = mc_config
         except Exception as exc:
             logging.error("Error loading tool configuration: %s", str(exc))
             raise exc
-
 
     def run(self):
         """
@@ -328,7 +349,8 @@ class MonteCarloCLI:
         dictionary for further serialization and/or aggreggation analysis.
         """
         if self.raw_results is not None:
-            raise RuntimeError("CLI run can only be run once per instantiation")
+            raise RuntimeError(
+                "CLI run can only be run once per instantiation")
 
         self._load_config()
         config = self.simulation_config
@@ -369,15 +391,17 @@ class MonteCarloCLI:
             model_name = p["model"]
             m = self.model_map[model_name]
             logging.info("Running simulation #%d out of %d. Progress: %.2f%%",
-                            i + 1, total, 100.0 * (i + 1) / total)
-            logging.info("Model: %s, Tax Regime: %s, Yearly Spending: $%.2f, Equity: %.2f%%",
-                            model_name, p["tax_regime"], p["yearly_spending"], p["equity_allocation"] * 100.0)
+                         i + 1, total, 100.0 * (i + 1) / total)
+            logging.info("Model: %s, Tax Regime: %s, Yearly Spending: $%.2f, "
+                         "Equity: %.2f%%", model_name, p["tax_regime"],
+                         p["yearly_spending"], p["equity_allocation"] * 100.0)
             setup_start = time.perf_counter()
 
             simulator = m()
             simulator.fit(returns, levels)
 
-            new_cell_key = (model_name, p["equity_allocation"], p["yearly_spending"])
+            new_cell_key = (model_name, p["equity_allocation"],
+                            p["yearly_spending"])
             if new_cell_key != cell_key:
                 cell_key = new_cell_key
                 cell_seed = int(rng.integers(1 << 32))
@@ -410,12 +434,12 @@ class MonteCarloCLI:
                 "results": run_output
             })
             data_end = time.perf_counter()
-            perf_counters[model_name]["data_storage"].append(data_end - data_start)
+            perf_counters[model_name]["data_storage"].append(
+                data_end - data_start)
             i += 1
 
         results["perf_data"] = perf_counters
         self.raw_results = results
-
 
     def aggregate(self):
         """
@@ -424,7 +448,8 @@ class MonteCarloCLI:
         and statistical information of the given run.
         """
         if self.agg_results is not None:
-            raise RuntimeError("Data aggregation can only be run once per CLI instance")
+            raise RuntimeError(
+                "Data aggregation can only be run once per CLI instance")
 
         sim_data = self.raw_results["simulations"]
         models = list(sim_data.keys())
@@ -445,17 +470,26 @@ class MonteCarloCLI:
             run_stats["results"][m] = []
             for sim in r:
                 yearly_spending = sim["spending"]
-                allocation_str = f"{sim["equity"]*100.0:02.0f}-{sim["ladder"]*100.0:02.0f}"
+                allocation_str = f"{sim["equity"]*100.0:02.0f}-" + \
+                                 f"{sim["ladder"]*100.0:02.0f}"
                 df_data = pd.DataFrame(sim["results"])
-                df_data["Returns"] = (df_data["Terminal NAV"] - initial_nav) / initial_nav
-                # Compute the Expected Shortfall 5 and 10 for ages ending in ruin.
-                ruin_ages = {i: int(v) for (i, v) in enumerate(sim["ruin_histogram"]) if v > 0}
+                df_data["Returns"] = (
+                    (df_data["Terminal NAV"] - initial_nav)
+                    / initial_nav
+                )
+                # Compute the Expected Shortfall 5 and 10 for ages ending in
+                # ruin.
+                ruin_ages = {
+                    i: int(v) for
+                    (i, v) in enumerate(sim["ruin_histogram"]) if v > 0
+                }
                 v = list(ruin_ages.keys())
                 f = list(ruin_ages.values())
                 ruin_flat_data = np.repeat(v, f)
 
                 if len(ruin_flat_data) > 0:
-                    p5, p10, p50 = np.quantile(ruin_flat_data, [0.05, 0.1, 0.5])
+                    p5, p10, p50 = np.quantile(
+                        ruin_flat_data, [0.05, 0.1, 0.5])
                     ruin_flat_data.sort()
                     es5_idx = np.where(ruin_flat_data <= p5)
                     es10_idx = np.where(ruin_flat_data <= p10)
@@ -475,9 +509,12 @@ class MonteCarloCLI:
 
                 entry["ruin_path_count"] = ruin
                 entry["ruin_month_min"] = min_ruin_age
-                entry["ruin_month_median"] = float(p50) if p50 is not None else None
-                entry["ruin_month_es5"] = float(es5) if es5 is not None else None
-                entry["ruin_month_es10"] = float(es10) if es10 is not None else None
+                entry["ruin_month_median"] = (
+                        float(p50) if p50 is not None else None)
+                entry["ruin_month_es5"] = (
+                        float(es5) if es5 is not None else None)
+                entry["ruin_month_es10"] = (
+                        float(es10) if es10 is not None else None)
 
                 entry["p5_return"] = df_data["Returns"].quantile(0.05)
                 entry["p10_return"] = df_data["Returns"].quantile(0.1)
@@ -490,26 +527,30 @@ class MonteCarloCLI:
 
 def parse_args():
     "CLI argument parser"
-    prog_description = """CLI tool that invokes MC simulation across all portfolio
-    models using the Long Equity and Fixed Income Ladders strategy.
+    prog_description = """CLI tool that invokes MC simulation across all
+    portfolio models using the Long Equity and Fixed Income Ladders strategy.
 
     Returns a CSV file with all the simulation results.
     """
     parser = argparse.ArgumentParser(description=prog_description)
     parser.add_argument("-c", "--config-file",
-                        help="Config file in JSON format that contains the simulation parameters",
+                        help="Config file in JSON format that contains the "
+                             "simulation parameters",
                         dest="config_filename",
                         required=True)
     parser.add_argument("-r", "--raw-output-file",
-                        help="Destination JSON file to store the raw results of the simulation",
+                        help="Destination JSON file to store the raw results "
+                             "of the simulation",
                         dest="raw_output_filename",
                         required=True)
     parser.add_argument("-o", "--aggregated-output-file",
-                        help="Destination JSON file to store aggregated results of the simulation",
+                        help="Destination JSON file to store aggregated "
+                             "results of the simulation",
                         dest="agg_output_filename",
                         required=True)
     parser.add_argument("-m", "--market-cache-file",
-                        help="Specifies an alternative parquet market data cache file",
+                        help="Specifies an alternative parquet market data "
+                             "cache file",
                         default="market_data.parquet",
                         dest="market_data_filename")
     return parser.parse_args()

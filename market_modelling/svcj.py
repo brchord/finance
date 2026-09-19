@@ -5,27 +5,34 @@ Time Series Simulation
 
 import numpy as np
 
+
 class SVCJSimulation:
     """
-    Stochastic Volatility with Correlated Jumps (SVCJ) Path Generator for SPX, VIX, and VIX3M.
-    
-    Generates joint trajectories for SPX price, 30-Day Spot VIX, and 3-Month VIX (VIX3M) 
-    using an Euler-Maruyama log-space discretization with full truncation boundary 
-    handling for zero/negative variance states.
-    
-    Empirical Reference Ranges (Eraker, Johannes & Polson, 2003 / Eraker, 2004):
+    Stochastic Volatility with Correlated Jumps (SVCJ) Path Generator for SPX,
+    VIX, and VIX3M.
+
+    Generates joint trajectories for SPX price, 30-Day Spot VIX, and 3-Month
+    VIX (VIX3M) using an Euler-Maruyama log-space discretization with full
+    truncation boundary handling for zero/negative variance states.
+
+    Empirical Reference Ranges
+    (Eraker, Johannes & Polson, 2003 / Eraker, 2004):
     -------------------------------------------------------------------------
     mu       : [0.07, 0.09]    - Annualized drift (7% to 9%).
-    kappa    : [3.0, 5.0]      - Mean reversion speed (half-life ~1.5 to 2.8 months).
+    kappa    : [3.0, 5.0]      - Mean reversion speed (half-life ~1.5 to
+                                 2.8 months).
     theta    : [0.0225, 0.0324]- Long-run variance (15% to 18% annualized vol).
     sigma_v  : [0.25, 0.35]    - Volatility of volatility.
-    rho      : [-0.85, -0.70]  - Price-variance correlation (diffusive leverage).
-    lambda_j : [1.0, 2.0]      - Annual jump intensity (~1 to 2 jumps per year).
+    rho      : [-0.85, -0.70]  - Price-variance correlation
+                                 (diffusive leverage).
+    lambda_j : [1.0, 2.0]      - Annual jump intensity (~1 to 2 jumps
+                                 per year).
     mu_v     : [0.02, 0.05]    - Mean size of variance jump.
     mu_y     : [-0.08, -0.03]  - Mean log-price jump size (-3% to -8%).
     sigma_y  : [0.03, 0.06]    - Price jump volatility.
     rho_j    : [-1.5, -0.5]    - Co-jump price-variance coupling coefficient.
     """
+
     def __init__(
         self,
         initial_spx: float,
@@ -48,18 +55,23 @@ class SVCJSimulation:
         initial_spx : float
             Starting spot price level for SPX (S_0).
         initial_vix : float
-            Starting volatility level as a decimal or percentage (e.g., 0.16 or 16.0 for 16% VIX).
-            Converted internally to initial variance (V_0 = (initial_vix / 100)^2 if > 1.0).
+            Starting volatility level as a decimal or percentage (e.g., 0.16 or
+            16.0 for 16% VIX).
+            Converted internally to initial variance
+            (V_0 = (initial_vix / 100)^2 if > 1.0).
         mu : float, default 0.08
-            Annualized drift / expected rate of return for the underlying price.
+            Annualized drift / expected rate of return for the underlying
+            price.
         kappa : float, default 4.0
             Physical (P-measure) mean-reversion speed parameter for variance.
         theta : float, default 0.0256
             Physical (P-measure) long-run variance target level.
         sigma_v : float, default 0.30
-            Volatility of volatility (diffusive noise scale for variance process).
+            Volatility of volatility (diffusive noise scale for variance
+            process).
         rho : float, default -0.75
-            Correlation coefficient between price and variance Brownian motions.
+            Correlation coefficient between price and variance Brownian
+            motions.
         lambda_j : float, default 1.5
             Jump intensity parameter (expected Poisson jump arrivals per year).
         mu_v : float, default 0.03
@@ -71,12 +83,15 @@ class SVCJSimulation:
         rho_j : float, default -1.0
             Co-jump dependency parameter (E[J^S | J^V] = mu_y + rho_j * J^V).
         variance_risk_premium : float, default 1.2
-            Multiplier mapping physical variance dynamics (P) to risk-neutral (Q) 
-            expectations used for derivative pricing and VIX/VIX3M calculation.
+            Multiplier mapping physical variance dynamics (P) to
+            risk-neutral (Q) expectations used for derivative pricing and
+            VIX/VIX3M calculation.
         """
-        # Initial Conditions (Normalizing initial_vix to decimal if passed on 0-100 scale)
+        # Initial Conditions (Normalizing initial_vix to decimal if passed
+        # on 0-100 scale)
         self.initial_spx = initial_spx
-        self.initial_vix_decimal = initial_vix / 100.0 if initial_vix > 1.0 else initial_vix
+        self.initial_vix_decimal = (
+                initial_vix / 100.0 if initial_vix > 1.0 else initial_vix)
         self.initial_variance = self.initial_vix_decimal ** 2
 
         # Continuous Diffusive Parameters (Physical P-measure)
@@ -103,9 +118,9 @@ class SVCJSimulation:
         # Verify Feller Condition
         feller_ratio = (2 * self.kappa * self.theta) / (self.sigma_v ** 2)
         if feller_ratio <= 1.0:
-            raise ValueError("Warning: Feller condition not strictly met "
-                  f"(Ratio: {feller_ratio:.2f} <= 1.0). "
-                  "Variance truncation active.")
+            raise ValueError(f"Warning: Feller condition not strictly met "
+                             f"(Ratio: {feller_ratio:.2f} <= 1.0). "
+                             f"Variance truncation active.")
 
     def _calculate_jump_compensator(self) -> float:
         """Calculates k_j = E[exp(J^S) - 1] to compensate price drift."""
@@ -121,15 +136,18 @@ class SVCJSimulation:
                            current_variance: np.ndarray,
                            term_days: float = 30.0) -> np.ndarray:
         """
-        Computes expected VIX index value under Q for a given term horizon in calendar days.
-        term_days = 30.0 for standard VIX; term_days = 90.0 (0.25 yrs) for VIX3M.
+        Computes expected VIX index value under Q for a given term horizon in
+        calendar days.
+        term_days = 30.0 for standard VIX; term_days = 90.0 (0.25 yrs) for
+                         VIX3M.
         """
         tau = term_days / 365.0
-        theta_total_q = self.theta_q + (self.lambda_q * self.mu_v_q / self.kappa_q)
+        theta_total_q = self.theta_q + (
+            self.lambda_q * self.mu_v_q / self.kappa_q)
 
         integrated_var_exp = (
-            theta_total_q + (current_variance - theta_total_q) * \
-              ((1.0 - np.exp(-self.kappa_q * tau)) / (self.kappa_q * tau))
+            theta_total_q + (current_variance - theta_total_q) *
+            ((1.0 - np.exp(-self.kappa_q * tau)) / (self.kappa_q * tau))
         )
         return np.sqrt(np.maximum(integrated_var_exp, 0.0)) * 100.0
 
@@ -156,7 +174,8 @@ class SVCJSimulation:
         spx_paths : np.ndarray
             Price paths array of shape (trading_days + 1, num_paths).
         vix_paths : np.ndarray
-            Standard 30-Day VIX index paths array of shape (trading_days + 1, num_paths).
+            Standard 30-Day VIX index paths array of shape
+            (trading_days + 1, num_paths).
         vix3m_paths : np.ndarray
             Synthetic 3-Month VIX (VIX3M) index paths array of shape
             (trading_days + 1, num_paths).
@@ -179,8 +198,10 @@ class SVCJSimulation:
         variance_state[:] = self.initial_variance
 
         spx_paths[0] = self.initial_spx
-        vix_paths[0] = self._compute_vix_index(variance_state, term_days=30.0)
-        vix3m_paths[0] = self._compute_vix_index(variance_state, term_days=90.0)
+        vix_paths[0] = self._compute_vix_index(
+            variance_state, term_days=30.0)
+        vix3m_paths[0] = self._compute_vix_index(
+            variance_state, term_days=90.0)
 
         # Jump compensator drift correction
         k_j = self._calculate_jump_compensator()
@@ -192,14 +213,16 @@ class SVCJSimulation:
         for step in range(trading_days):
             spx_curr = spx_paths[step]
 
-            # Full Truncation Scheme for zero/negative variance boundary protection
+            # Full Truncation Scheme for zero/negative variance boundary
+            # protection.
             variance_pos = np.maximum(variance_state, 0.0)
             sqrt_variance_pos = np.sqrt(variance_pos)
 
             # Correlated Gaussian innovations
             variance_shocks = rng.standard_normal(num_paths)
             independent_shocks = rng.standard_normal(num_paths)
-            price_shocks = self.rho * variance_shocks + rho_complement * independent_shocks
+            price_shocks = (self.rho * variance_shocks +
+                            rho_complement * independent_shocks)
 
             # Poisson jump arrivals per step
             num_jumps = rng.poisson(self.lambda_j * dt, size=num_paths)
@@ -209,8 +232,9 @@ class SVCJSimulation:
                 scale=self.mu_v, size=num_paths) * (num_jumps > 0)
 
             price_jump_mean = self.mu_y + (self.rho_j * variance_jump)
-            price_jump = rng.normal(
-                loc=price_jump_mean, scale=self.sigma_y, size=num_paths) * (num_jumps > 0)
+            price_jump = (rng.normal(
+                loc=price_jump_mean, scale=self.sigma_y, size=num_paths) *
+                (num_jumps > 0))
 
             # Continuous + Jump update for latent Variance state
             d_variance = (
@@ -228,8 +252,11 @@ class SVCJSimulation:
             )
             spx_paths[step + 1] = spx_curr * np.exp(d_log_spx)
 
-            # Map updated variance state directly to 30-Day VIX and 90-Day VIX3M
-            vix_paths[step + 1] = self._compute_vix_index(variance_state, term_days=30.0)
-            vix3m_paths[step + 1] = self._compute_vix_index(variance_state, term_days=90.0)
+            # Map updated variance state directly to 30-Day VIX and
+            # 90-Day VIX3M.
+            vix_paths[step + 1] = self._compute_vix_index(
+                variance_state, term_days=30.0)
+            vix3m_paths[step + 1] = self._compute_vix_index(
+                variance_state, term_days=90.0)
 
         return spx_paths[:-1, :], vix_paths[:-1, :], vix3m_paths[:-1, :]

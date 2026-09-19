@@ -1,8 +1,8 @@
 {
-    "type": "LongSPYWithTreasuryLadders",
+    "average_inflation": 0.034,
+    "dividend_yield": 0.01,
     "equity_allocation": 0.90,
     "ladder_allocation": 0.10,
-    "yearly_spending": 250000,
-    "dividend_yield": 0.01,
-    "average_inflation": 0.034
+    "type": "LongSPYWithTreasuryLadders",
+    "yearly_spending": 250000
 }

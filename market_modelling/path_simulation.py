@@ -1,7 +1,9 @@
 """
 path_simulation.py
 
-Vectorized VAR(p) Real-Space Path Simulators for Monte Carlo Portfolio Analysis.
+Vectorized VAR(p) Real-Space Path Simulators for Monte Carlo Portfolio
+Analysis.
+
 Operates on monthly nominal price levels [spx, cpi, yield_3m, yield_5y]
 to capture joint cross-asset behavior and inflation dynamics upstream.
 """
@@ -24,7 +26,8 @@ class PathSimulator(ABC):
     - 5 Year T-Note rates.
     """
     @abstractmethod
-    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+    def fit(self, returns_data: pd.DataFrame,
+            levels_data: pd.DataFrame) -> None:
         """
         Fits the given model using market levels and its corresponding returns.
         """
@@ -49,10 +52,14 @@ class PathSimulator(ABC):
         Returns:
         --------
         tuple[ndarray, ndarray, ndarray, ndarray]
-            - A matrix of num_paths x (simulation_months + 1) representing the nominal SPX Index.
-            - A matrix of num_paths x (simulation_months + 1) representing the nominal CPI Index.
-            - A matrix of num_paths x (simulation_months + 1) representing 3M T-Bill yields.
-            - A matrix of num_paths x (simulation_months + 1) representing 5Y T-Note yields.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              the nominal SPX Index.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              the nominal CPI Index.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              3M T-Bill yields.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              5Y T-Note yields.
         """
         return {}
 
@@ -60,11 +67,11 @@ class PathSimulator(ABC):
 class VARResidualBootstrapSimulator(PathSimulator):
     """
     Vectorized VAR(p) Filtered Block Bootstrap Engine in Monthly Real Space.
-    Fits an unconstrained Vector Autoregression on monthly real total returns and 
-    resamples empirical OLS residual blocks.
+    Fits an unconstrained Vector Autoregression on monthly real total returns
+    and resamples empirical OLS residual blocks.
 
     Note: Lacks a macro valuation error-correction term (CAPE drag).
-    Useful for short-to-medium horizon risk assessment; can exhibit variance 
+    Useful for short-to-medium horizon risk assessment; can exhibit variance
     expansion over multi-decade horizons without structural valuation anchors.
     """
 
@@ -82,33 +89,40 @@ class VARResidualBootstrapSimulator(PathSimulator):
         lag_order : int, default=1
             Order p of the monthly VAR(p) model.
             Calibration Range: 1 to 3 monthly lags.
-            Higher lags (>3) risk overfitting monthly sample size without improving macro fit.
+            Higher lags (>3) risk overfitting monthly sample size without
+            improving macro fit.
 
         residual_block_size : int, default=48 (4 years)
-            Block size in months for bootstrapping empirical VAR residual matrices.
+            Block size in months for bootstrapping empirical VAR residual
+            matrices.
             Calibration Range: 24 to 60 months (2 to 5 years).
-            Preserves residual autocorrelation, regime persistence, and volatility clustering.
-            NOTE: block starts are drawn i.i.d. across block index, so persistence is
-            only preserved *within* a block -- multi-year regimes longer than this
-            window get diluted across block boundaries. Empirically calibrated against
-            1982-2026 CPI history: default=48 was the smallest block size whose
-            simulated 5-year-window inflation variance matched the realized historical
-            5-year-window variance (0.82%) on that sample. Since that sample excludes
-            the 1965-1982 high-inflation regime, treat this as a floor, not a ceiling,
-            on plausible sustained-inflation tail risk.
+            Preserves residual autocorrelation, regime persistence, and
+            volatility clustering.
+            NOTE: block starts are drawn i.i.d. across block index, so
+            persistence is only preserved *within* a block -- multi-year
+            regimes longer than this window get diluted across block
+            boundaries. Empirically calibrated against 1982-2026 CPI history:
+            default=48 was the smallest block size whose simulated
+            5-year-window inflation variance matched the realized historical
+            5-year-window variance (0.82%) on that sample. Since that sample
+            excludes the 1965-1982 high-inflation regime, treat this as a
+            floor, not a ceiling, on plausible sustained-inflation tail risk.
 
         rate_reversion_speed : float (phi_rate), default=0.15
-            Annual mean-reversion speed pulling 3M/5Y yields back toward their long-run
-            equilibrium levels. Calibration Range: 0.05 to 0.25.
+            Annual mean-reversion speed pulling 3M/5Y yields back toward their
+            long-run equilibrium levels. Calibration Range: 0.05 to 0.25.
               - 0.05 implies a ~14-year yield half-life.
               - 0.25 implies a ~2.8-year yield half-life.
-            Without this term, yields evolve as an unanchored random walk (unit root) and
-            can drift to implausible levels, or get stuck at the zero floor for extended
-            stretches, over multi-decade simulation horizons.
+            Without this term, yields evolve as an unanchored random walk
+            (unit root) and can drift to implausible levels, or get stuck at
+            the zero floor for extended stretches, over multi-decade
+            simulation horizons.
 
         target_yield_3m, target_yield_5y : float, optional
-            Long-run equilibrium yield levels used as the reversion anchor for each series.
-            If None (default), estimated from the historical sample mean at fit() time.
+            Long-run equilibrium yield levels used as the reversion anchor for
+            each series.
+            If None (default), estimated from the historical sample mean at
+            fit() time.
         """
         self.lag_order = lag_order
         self.residual_block_size = residual_block_size
@@ -129,15 +143,17 @@ class VARResidualBootstrapSimulator(PathSimulator):
         """Returns the name of this Path Simulator"""
         return "VARResidualBootstrapSimulator"
 
-    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+    def fit(self, returns_data: pd.DataFrame,
+            levels_data: pd.DataFrame) -> None:
         """
         Fits VAR(p) coefficients using OLS on 3D real monthly returns.
 
         Parameters:
         -----------
         returns_data : pd.DataFrame
-            Matrix of monthly increments: 
-                ['spx_log_return', 'cpi_log_return', 'yield_3m_diff', 'yield_5y_diff']
+            Matrix of monthly increments:
+                ['spx_log_return', 'cpi_log_return',
+                 'yield_3m_diff', 'yield_5y_diff']
         levels_data : pd.DataFrame
             Matrix of monthly levels:
                 ['spx_close', 'cpi', 'yield_3m', 'yield_5y']
@@ -151,12 +167,15 @@ class VARResidualBootstrapSimulator(PathSimulator):
 
         design_components = [np.ones((effective_sample_size, 1))]
         for lag in range(1, p + 1):
-            design_components.append(increment_matrix[p - lag : total_observations - lag])
+            design_components.append(
+                increment_matrix[p - lag: total_observations - lag])
         design_matrix = np.hstack(design_components)
 
         self.coefficient_matrix = np.linalg.pinv(
-            design_matrix.T @ design_matrix) @ (design_matrix.T @ target_matrix)
-        self.residual_matrix = target_matrix - (design_matrix @ self.coefficient_matrix)
+            design_matrix.T @ design_matrix) @ (
+                design_matrix.T @ target_matrix)
+        self.residual_matrix = target_matrix - (
+            design_matrix @ self.coefficient_matrix)
         self.historical_seed_matrix = increment_matrix[-p:]
 
         self.initial_spx_level = float(levels_data["spx_close"].iloc[-1])
@@ -172,7 +191,8 @@ class VARResidualBootstrapSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -187,10 +207,14 @@ class VARResidualBootstrapSimulator(PathSimulator):
         Returns:
         --------
         tuple[ndarray, ndarray, ndarray, ndarray]
-            - A matrix of num_paths x (simulation_months + 1) representing the nominal SPX Index.
-            - A matrix of num_paths x (simulation_months + 1) representing the nominal CPI Index.
-            - A matrix of num_paths x (simulation_months + 1) representing 3M T-Bill yields.
-            - A matrix of num_paths x (simulation_months + 1) representing 5Y T-Note yields.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              the nominal SPX Index.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              the nominal CPI Index.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              3M T-Bill yields.
+            - A matrix of num_paths x (simulation_months + 1) representing
+              5Y T-Note yields.
         """
         if self.coefficient_matrix is None or self.residual_matrix is None:
             raise RuntimeError("Model is not fitted. Call fit() first.")
@@ -203,19 +227,24 @@ class VARResidualBootstrapSimulator(PathSimulator):
 
         num_blocks = int(np.ceil(simulation_months / block_size))
         max_start_index = effective_sample_size - block_size
-        random_block_starts = rng.integers(0, max_start_index + 1, size=(num_paths, num_blocks))
+        random_block_starts = rng.integers(
+            0, max_start_index + 1, size=(num_paths, num_blocks))
 
-        bootstrapped_residuals = np.zeros((num_paths, num_blocks * block_size, num_variables))
+        bootstrapped_residuals = np.zeros(
+            (num_paths, num_blocks * block_size, num_variables))
         for path_idx in range(num_paths):
             sampled_blocks = [
-                self.residual_matrix[start : start + block_size]
+                self.residual_matrix[start: start + block_size]
                 for start in random_block_starts[path_idx]]
             bootstrapped_residuals[path_idx] = np.vstack(sampled_blocks)
-        bootstrapped_residuals = bootstrapped_residuals[:, :simulation_months, :]
+        bootstrapped_residuals = (
+                bootstrapped_residuals[:, :simulation_months, :])
 
-        # Yields now require step-wise (rather than vectorized cumsum) evolution,
-        # since the reversion term depends on the current level each month.
-        path_histories = np.tile(self.historical_seed_matrix, (num_paths, 1, 1))
+        # Yields now require step-wise (rather than vectorized cumsum)
+        # evolution, since the reversion term depends on the current level
+        # each month.
+        path_histories = np.tile(
+            self.historical_seed_matrix, (num_paths, 1, 1))
 
         spx_paths = np.zeros((num_paths, simulation_months))
         cpi_paths = np.zeros((num_paths, simulation_months))
@@ -233,8 +262,8 @@ class VARResidualBootstrapSimulator(PathSimulator):
                 design_step_components.append(path_histories[:, p - lag, :])
             current_design_matrix = np.hstack(design_step_components)
 
-            raw_increments = current_design_matrix @ self.coefficient_matrix + \
-                bootstrapped_residuals[:, step, :]
+            raw_increments = (current_design_matrix @ self.coefficient_matrix +
+                              bootstrapped_residuals[:, step, :])
 
             spx_log_ret = raw_increments[:, 0]
             cpi_log_ret = raw_increments[:, 1]
@@ -270,10 +299,11 @@ class VARResidualBootstrapSimulator(PathSimulator):
 
 class ValuationAdjustedVARSimulator(PathSimulator):
     """
-    Parametric Gaussian VAR(p) Engine with Cyclical Valuation (CAPE) Mean-Reversion.
+    Parametric Gaussian VAR(p) Engine with Cyclical Valuation (CAPE)
+    Mean-Reversion.
 
-    Combines linear VAR transition mechanics with path-dependent valuation (CAPE) drag,
-    assuming multivariate normal innovations N(0, Sigma_e).
+    Combines linear VAR transition mechanics with path-dependent valuation
+    (CAPE) drag, assuming multivariate normal innovations N(0, Sigma_e).
     """
 
     def __init__(
@@ -297,7 +327,8 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             Long-term equilibrium Shiller CAPE median.
             Calibration Range: 18.0 to 24.0.
               - 18.0 reflects the full 150-year historical U.S. equity median.
-              - 24.0 reflects the modern post-1990 high-margin/low-cost capital baseline.
+              - 24.0 reflects the modern post-1990 high-margin/low-cost capital
+                     baseline.
 
         cape_reversion_speed : float (phi), default=0.05
             Annual speed of CAPE mean-reversion toward target_cape.
@@ -309,20 +340,23 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             Annual equity return drag per unit of log-valuation gap:
             Penalty = -gamma * (ln(CAPE_t) - ln(CAPE*)).
             Calibration Range: 0.010 to 0.025.
-            Estimated via OLS of 10-year forward returns against starting ln(CAPE).
+            Estimated via OLS of 10-year forward returns against starting
+            ln(CAPE).
 
         annual_earnings_growth : float, default=0.02
             Expected annual real earnings growth rate.
             Calibration Range: 0.015 to 0.025 (1.5% to 2.5% real growth).
 
         rate_reversion_speed : float (phi_rate), default=0.15
-            Annual mean-reversion speed pulling 3M/5Y yields back toward their long-run
-            equilibrium levels. Calibration Range: 0.05 to 0.25. Without this term,
-            yields evolve as an unanchored random walk over multi-decade horizons.
+            Annual mean-reversion speed pulling 3M/5Y yields back toward their
+            long-run equilibrium levels. Calibration Range: 0.05 to 0.25.
+            Without this term, yields evolve as an unanchored random walk over
+            multi-decade horizons.
 
         target_yield_3m, target_yield_5y : float, optional
             Long-run equilibrium yield levels used as the reversion anchor.
-            If None (default), estimated from the historical sample mean at fit() time.
+            If None (default), estimated from the historical sample mean at
+            fit() time.
         """
         self.lag_order = lag_order
         self.target_cape = target_cape
@@ -362,7 +396,8 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             Monthly levels matrix.
         initial_cape : float, default=34.0
             Spot Shiller CAPE ratio at the start of simulation.
-            Calibration Range: Query current Yale/Shiller dataset (typically 25.0 to 38.0).
+            Calibration Range: Query current Yale/Shiller dataset (typically
+                               25.0 to 38.0).
         """
         self.initial_cape = initial_cape
         increment_matrix = returns_data.values
@@ -374,11 +409,13 @@ class ValuationAdjustedVARSimulator(PathSimulator):
 
         design_components = [np.ones((effective_sample_size, 1))]
         for lag in range(1, p + 1):
-            design_components.append(increment_matrix[p - lag : total_observations - lag])
+            design_components.append(
+                increment_matrix[p - lag: total_observations - lag])
         design_matrix = np.hstack(design_components)
 
         self.coefficient_matrix = np.linalg.pinv(
-            design_matrix.T @ design_matrix) @ (design_matrix.T @ target_matrix)
+            design_matrix.T @ design_matrix) @ (
+                design_matrix.T @ target_matrix)
         residuals = target_matrix - (design_matrix @ self.coefficient_matrix)
 
         self.residual_cov_matrix = np.cov(residuals, rowvar=False)
@@ -395,7 +432,8 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -426,7 +464,8 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             size=(simulation_months, num_paths),
         )
 
-        path_histories = np.tile(self.historical_seed_matrix, (num_paths, 1, 1))
+        path_histories = np.tile(self.historical_seed_matrix,
+                                 (num_paths, 1, 1))
 
         spx_paths = np.zeros((num_paths, simulation_months))
         cpi_paths = np.zeros((num_paths, simulation_months))
@@ -447,8 +486,9 @@ class ValuationAdjustedVARSimulator(PathSimulator):
                 design_step_components.append(path_histories[:, p - lag, :])
             current_design_matrix = np.hstack(design_step_components)
 
-            predicted_increments = current_design_matrix @ self.coefficient_matrix + \
-                gaussian_shocks[step, :, :]
+            predicted_increments = (current_design_matrix @
+                                    self.coefficient_matrix +
+                                    gaussian_shocks[step, :, :])
 
             valuation_gap = log_cape - log_target_cape
             valuation_penalty = -self.gamma_cape * valuation_gap * dt
@@ -488,9 +528,10 @@ class HybridValuationVARSimulator(PathSimulator):
     """
     Hybrid VECM/VAR Filtered Residual Bootstrap Engine.
 
-    Integrates long-horizon macro valuation mean-reversion (CAPE drag) with 
-    non-parametric empirical block-bootstrapped VAR residuals.
-    De-means equity drift to align VAR stochastics with long-term equilibrium fundamentals.
+    Integrates long-horizon macro valuation mean-reversion (CAPE drag)
+    with non-parametric empirical block-bootstrapped VAR residuals.
+    De-means equity drift to align VAR stochastics with long-term equilibrium
+    fundamentals.
     """
 
     def __init__(
@@ -514,12 +555,14 @@ class HybridValuationVARSimulator(PathSimulator):
         residual_block_size : int, default=48 (4 years)
             Block size for empirical residual block bootstrapping.
             Calibration Range: 24 to 60 months (2 to 5 years).
-            See VARResidualBootstrapSimulator for the empirical calibration note --
-            block starts are i.i.d. across block index, so multi-year regime
-            persistence beyond this window is diluted at block boundaries.
+            See VARResidualBootstrapSimulator for the empirical calibration
+            note -- block starts are i.i.d. across block index, so multi-year
+                    regime persistence beyond this window is diluted at block
+                    boundaries.
 
         target_cape : float, default=22.0
-            Long-term equilibrium Shiller CAPE median. Calibration Range: 18.0 to 24.0.
+            Long-term equilibrium Shiller CAPE median.
+            Calibration Range: 18.0 to 24.0.
 
         cape_reversion_speed : float (phi), default=0.05
             Annual CAPE mean-reversion speed. Calibration Range: 0.03 to 0.08.
@@ -529,16 +572,19 @@ class HybridValuationVARSimulator(PathSimulator):
             Calibration Range: 0.010 to 0.025.
 
         annual_earnings_growth : float, default=0.02
-            Expected annual real baseline earnings growth. Calibration Range: 0.015 to 0.025.
+            Expected annual real baseline earnings growth.
+            Calibration Range: 0.015 to 0.025.
 
         rate_reversion_speed : float (phi_rate), default=0.15
-            Annual mean-reversion speed pulling 3M/5Y yields back toward their long-run
-            equilibrium levels. Calibration Range: 0.05 to 0.25. Without this term,
-            yields evolve as an unanchored random walk over multi-decade horizons.
+            Annual mean-reversion speed pulling 3M/5Y yields back toward their
+            long-run equilibrium levels. Calibration Range: 0.05 to 0.25.
+            Without this term, yields evolve as an unanchored random walk over
+            multi-decade horizons.
 
         target_yield_3m, target_yield_5y : float, optional
             Long-run equilibrium yield levels used as the reversion anchor.
-            If None (default), estimated from the historical sample mean at fit() time.
+            If None (default), estimated from the historical sample mean at
+            fit() time.
         """
         self.lag_order = lag_order
         self.residual_block_size = residual_block_size
@@ -573,7 +619,8 @@ class HybridValuationVARSimulator(PathSimulator):
         initial_cape: float = 34.0,
     ) -> None:
         """
-        Fits VAR(p) via OLS, extracts empirical residuals, and logs initial conditions.
+        Fits VAR(p) via OLS, extracts empirical residuals, and logs initial
+        conditions.
 
         Parameters:
         -----------
@@ -585,12 +632,14 @@ class HybridValuationVARSimulator(PathSimulator):
             Starting Shiller CAPE. Calibration Range: 25.0 to 38.0.
         """
         self.initial_cape = initial_cape
-        self.expected_inflation = float(returns_data["cpi_log_return"].mean() * 12)
+        self.expected_inflation = float(
+            returns_data["cpi_log_return"].mean() * 12)
         increment_matrix = returns_data.values
         total_observations, _ = increment_matrix.shape
         p = self.lag_order
 
-        # Store historical sample mean to isolate stochastic innovations from historical drift
+        # Store historical sample mean to isolate stochastic innovations from
+        # historical drift.
         self.historical_mean_returns = np.mean(increment_matrix, axis=0)
 
         target_matrix = increment_matrix[p:]
@@ -598,12 +647,15 @@ class HybridValuationVARSimulator(PathSimulator):
 
         design_components = [np.ones((effective_sample_size, 1))]
         for lag in range(1, p + 1):
-            design_components.append(increment_matrix[p - lag : total_observations - lag])
+            design_components.append(
+                increment_matrix[p - lag: total_observations - lag])
         design_matrix = np.hstack(design_components)
 
         self.coefficient_matrix = np.linalg.pinv(
-            design_matrix.T @ design_matrix) @ (design_matrix.T @ target_matrix)
-        self.residual_matrix = target_matrix - (design_matrix @ self.coefficient_matrix)
+            design_matrix.T @ design_matrix) @ (
+                design_matrix.T @ target_matrix)
+        self.residual_matrix = target_matrix - (
+            design_matrix @ self.coefficient_matrix)
         self.historical_seed_matrix = increment_matrix[-p:]
 
         self.initial_spx_level = float(levels_data["spx_close"].iloc[-1])
@@ -617,7 +669,8 @@ class HybridValuationVARSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -645,16 +698,20 @@ class HybridValuationVARSimulator(PathSimulator):
 
         num_blocks = int(np.ceil(simulation_months / block_size))
         max_start_index = effective_sample_size - block_size
-        random_block_starts = rng.integers(0, max_start_index + 1, size=(num_paths, num_blocks))
+        random_block_starts = rng.integers(
+            0, max_start_index + 1, size=(num_paths, num_blocks))
 
-        bootstrapped_residuals = np.zeros((num_paths, num_blocks * block_size, num_variables))
+        bootstrapped_residuals = np.zeros(
+            (num_paths, num_blocks * block_size, num_variables))
         for path_idx in range(num_paths):
-            sampled_blocks = [self.residual_matrix[start : start + block_size]
+            sampled_blocks = [self.residual_matrix[start: start + block_size]
                               for start in random_block_starts[path_idx]]
             bootstrapped_residuals[path_idx] = np.vstack(sampled_blocks)
-        bootstrapped_residuals = bootstrapped_residuals[:, :simulation_months, :]
+        bootstrapped_residuals = (
+                bootstrapped_residuals[:, :simulation_months, :])
 
-        path_histories = np.tile(self.historical_seed_matrix, (num_paths, 1, 1))
+        path_histories = np.tile(self.historical_seed_matrix,
+                                 (num_paths, 1, 1))
 
         spx_paths = np.zeros((num_paths, simulation_months))
         cpi_paths = np.zeros((num_paths, simulation_months))
@@ -670,7 +727,8 @@ class HybridValuationVARSimulator(PathSimulator):
         log_target_cape = np.log(self.target_cape)
 
         # Sustainable real return anchor
-        equilibrium_equity_drift = (self.earnings_growth + self.expected_inflation) * dt
+        equilibrium_equity_drift = (
+            self.earnings_growth + self.expected_inflation) * dt
         historical_spx_mean = self.historical_mean_returns[0]
 
         for step in range(simulation_months):
@@ -679,8 +737,8 @@ class HybridValuationVARSimulator(PathSimulator):
                 design_step_components.append(path_histories[:, p - lag, :])
             current_design_matrix = np.hstack(design_step_components)
 
-            raw_increments = current_design_matrix @ self.coefficient_matrix + \
-                bootstrapped_residuals[:, step, :]
+            raw_increments = (current_design_matrix @ self.coefficient_matrix +
+                              bootstrapped_residuals[:, step, :])
 
             # Isolate zero-mean stochastic equity shock from VAR
             spx_stochastic_shock = raw_increments[:, 0] - historical_spx_mean
@@ -689,10 +747,12 @@ class HybridValuationVARSimulator(PathSimulator):
             valuation_penalty = -self.gamma_cape * valuation_gap * dt
 
             # Reconstruct equity return anchored to equilibrium drift
-            spx_log_ret = equilibrium_equity_drift + spx_stochastic_shock + valuation_penalty
+            spx_log_ret = (equilibrium_equity_drift + spx_stochastic_shock +
+                           valuation_penalty)
             cpi_log_ret = raw_increments[:, 1]
             # Error-correction overlay: pull yields back toward their long-run
-            # equilibrium level so they don't behave as an unanchored random walk.
+            # equilibrium level so they don't behave as an unanchored
+            # random walk.
             diff_3m = raw_increments[:, 2] - \
                 self.phi_rate * (curr_3m - self.target_yield_3m) * dt
             diff_5y = raw_increments[:, 3] - \
@@ -703,7 +763,8 @@ class HybridValuationVARSimulator(PathSimulator):
             curr_3m = np.maximum(0.0, curr_3m + diff_3m)
             curr_5y = np.maximum(0.0, curr_5y + diff_5y)
 
-            # CAPE update driven strictly by mean-zero return innovations and reversion drag
+            # CAPE update driven strictly by mean-zero return innovations and
+            # reversion drag.
             log_cape += spx_stochastic_shock - \
                 (self.phi_cape + self.gamma_cape) * valuation_gap * dt
 
@@ -787,15 +848,16 @@ class RawBlockBootstrapSimulator(PathSimulator):
         """Model name"""
         return "RawBlockBootstrapSimulator"
 
-    def fit(self, returns_data: pd.DataFrame, levels_data: pd.DataFrame) -> None:
+    def fit(self, returns_data: pd.DataFrame,
+            levels_data: pd.DataFrame) -> None:
         """
         Stores the raw historical increment matrix directly -- no VAR fit,
         no coefficient estimation, no residual extraction. What you draw at
         simulation time is exactly what was realized historically.
         """
         self.historical_matrix = returns_data[
-            ["spx_log_return", "cpi_log_return", "yield_3m_diff", "yield_5y_diff"]
-        ].values
+            ["spx_log_return", "cpi_log_return",
+             "yield_3m_diff", "yield_5y_diff"]].values
 
         self.initial_spx_level = float(levels_data["spx_close"].iloc[-1])
         self.initial_cpi_level = float(levels_data["cpi"].iloc[-1])
@@ -808,7 +870,8 @@ class RawBlockBootstrapSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -835,15 +898,18 @@ class RawBlockBootstrapSimulator(PathSimulator):
 
         num_blocks = int(np.ceil(simulation_months / block_size))
         max_start_index = effective_sample_size - block_size
-        random_block_starts = rng.integers(0, max_start_index + 1, size=(num_paths, num_blocks))
+        random_block_starts = rng.integers(
+            0, max_start_index + 1, size=(num_paths, num_blocks))
 
-        bootstrapped_increments = np.zeros((num_paths, num_blocks * block_size, num_variables))
+        bootstrapped_increments = np.zeros(
+            (num_paths, num_blocks * block_size, num_variables))
         for path_idx in range(num_paths):
             sampled_blocks = [
                 self.historical_matrix[start:start + block_size]
                 for start in random_block_starts[path_idx]]
             bootstrapped_increments[path_idx] = np.vstack(sampled_blocks)
-        bootstrapped_increments = bootstrapped_increments[:, :simulation_months, :]
+        bootstrapped_increments = (
+                bootstrapped_increments[:, :simulation_months, :])
 
         spx_paths = np.zeros((num_paths, simulation_months))
         cpi_paths = np.zeros((num_paths, simulation_months))
@@ -861,8 +927,10 @@ class RawBlockBootstrapSimulator(PathSimulator):
             spx_log_ret = raw[:, 0]
             cpi_log_ret = raw[:, 1]
             # Structural yield anchor only -- see class docstring.
-            diff_3m = raw[:, 2] - self.phi_rate * (curr_3m - self.target_yield_3m) * dt
-            diff_5y = raw[:, 3] - self.phi_rate * (curr_5y - self.target_yield_5y) * dt
+            diff_3m = raw[:, 2] - self.phi_rate * (
+                curr_3m - self.target_yield_3m) * dt
+            diff_5y = raw[:, 3] - self.phi_rate * (
+                curr_5y - self.target_yield_5y) * dt
 
             curr_spx *= np.exp(spx_log_ret)
             curr_cpi *= np.exp(cpi_log_ret)
@@ -878,8 +946,10 @@ class RawBlockBootstrapSimulator(PathSimulator):
 
 
 # NBER US Business Cycle Expansions and Contractions, peak/trough dates.
-# Source: https://www.nber.org/research/data/us-business-cycle-expansions-and-contractions
-# Data as published by NBER, last updated 03/14/2023. (peak_month, trough_month)
+# Source:
+# https://www.nber.org/research/data/us-business-cycle-expansions-and-contractions
+# Data as published by NBER, last updated 03/14/2023.
+# (peak_month, trough_month).
 NBER_BUSINESS_CYCLES = [
     ("1857-06-01", "1858-12-01"), ("1860-10-01", "1861-06-01"),
     ("1865-04-01", "1867-12-01"), ("1869-06-01", "1870-12-01"),
@@ -918,7 +988,8 @@ def label_regimes(
     for peak_str, trough_str in nber_cycles:
         contraction_start = pd.Timestamp(peak_str) + pd.DateOffset(months=1)
         contraction_end = pd.Timestamp(trough_str)
-        mask = (monthly_index >= contraction_start) & (monthly_index <= contraction_end)
+        mask = ((monthly_index >= contraction_start) &
+                (monthly_index <= contraction_end))
         labels[mask] = 1
     return labels
 
@@ -978,7 +1049,8 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
             Same structural yield anchor as the other simulators in this
             module -- see VARResidualBootstrapSimulator.
         """
-        self.block_size = block_sizes if block_sizes is not None else {0: 48, 1: 6}
+        self.block_size = (block_sizes if
+                           block_sizes is not None else {0: 48, 1: 6})
         self.phi_rate = rate_reversion_speed
         self.target_yield_3m = target_yield_3m
         self.target_yield_5y = target_yield_5y
@@ -1011,14 +1083,16 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
             regime_labels = label_regimes(returns_data.index)
         regime_labels = regime_labels.reindex(returns_data.index)
 
-        cols = ["spx_log_return", "cpi_log_return", "yield_3m_diff", "yield_5y_diff"]
+        cols = ["spx_log_return", "cpi_log_return",
+                "yield_3m_diff", "yield_5y_diff"]
         for state in (0, 1):
             mask = (regime_labels == state).values
             self.pool[state] = returns_data.loc[mask, cols].values
             if len(self.pool[state]) <= self.block_size[state]:
                 raise ValueError(
-                    f"Regime {state} has only {len(self.pool[state])} historical "
-                    f"months, not enough for block_size={self.block_size[state]}.")
+                    f"Regime {state} has only {len(self.pool[state])} "
+                    f"historical months, not enough for block_size="
+                    f"{self.block_size[state]}.")
 
         # Empirical transition matrix via simple frequency counting -- valid
         # because regimes are observed (NBER-labeled), not hidden/inferred.
@@ -1037,10 +1111,13 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
         labels_arr = regime_labels.values
         n0 = int((labels_arr == 0).sum())
         n1 = int((labels_arr == 1).sum())
-        transitions_01 = int(np.sum((labels_arr[:-1] == 0) & (labels_arr[1:] == 1)))
-        transitions_10 = int(np.sum((labels_arr[:-1] == 1) & (labels_arr[1:] == 0)))
+        transitions_01 = int(np.sum(
+            (labels_arr[:-1] == 0) & (labels_arr[1:] == 1)))
+        transitions_10 = int(np.sum(
+            (labels_arr[:-1] == 1) & (labels_arr[1:] == 0)))
         if labels_arr[0] == 1:
-            transitions_01 += 1  # left-censored entry, occurred before the window
+            # left-censored entry, occurred before the window
+            transitions_01 += 1
         if labels_arr[-1] == 1:
             transitions_10 += 1  # right-censored exit, occurs after the window
 
@@ -1060,7 +1137,8 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -1085,13 +1163,14 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
 
         # Step 1: vectorized regime path generation across all paths at once.
         regime_path = np.zeros((num_paths, simulation_months), dtype=int)
-        regime_path[:, 0] = rng.choice([0, 1], size=num_paths, p=self.stationary_dist)
+        regime_path[:, 0] = rng.choice(
+            [0, 1], size=num_paths, p=self.stationary_dist)
         rand_draws = rng.random((num_paths, simulation_months - 1))
         for t in range(1, simulation_months):
             prev = regime_path[:, t - 1]
             p_switch = np.where(prev == 0,
-                                 self.transition_matrix[0, 1],
-                                 self.transition_matrix[1, 0])
+                                self.transition_matrix[0, 1],
+                                self.transition_matrix[1, 0])
             switched = rand_draws[:, t - 1] < p_switch
             regime_path[:, t] = np.where(switched, 1 - prev, prev)
 
@@ -1104,7 +1183,8 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
             while t < simulation_months:
                 regime = regime_path[path_idx, t]
                 run_end = t
-                while run_end < simulation_months and regime_path[path_idx, run_end] == regime:
+                while (run_end < simulation_months and
+                       regime_path[path_idx, run_end] == regime):
                     run_end += 1
                 run_length = run_end - t
 
@@ -1137,8 +1217,10 @@ class RegimeSwitchingBootstrapSimulator(PathSimulator):
 
             spx_log_ret = raw[:, 0]
             cpi_log_ret = raw[:, 1]
-            diff_3m = raw[:, 2] - self.phi_rate * (curr_3m - self.target_yield_3m) * dt
-            diff_5y = raw[:, 3] - self.phi_rate * (curr_5y - self.target_yield_5y) * dt
+            diff_3m = raw[:, 2] - self.phi_rate * (
+                curr_3m - self.target_yield_3m) * dt
+            diff_5y = raw[:, 3] - self.phi_rate * (
+                curr_5y - self.target_yield_5y) * dt
 
             curr_spx *= np.exp(spx_log_ret)
             curr_cpi *= np.exp(cpi_log_ret)
@@ -1179,7 +1261,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
       quarantined away by the regime partition and isn't subject to the
       same small-sample optimism bias.
 
-    CPI and yields are handled identically to RegimeSwitchingBootstrapSimulator:
+    CPI and yields are handled identically to
+    RegimeSwitchingBootstrapSimulator:
     CPI draws are raw and regime-conditional (no anchor -- see conversation
     history for why this was deliberately not added); yields retain the same
     structural mean-reversion overlay used throughout this module.
@@ -1212,7 +1295,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         rate_reversion_speed, target_yield_3m, target_yield_5y : See
             VARResidualBootstrapSimulator -- same structural yield anchor.
         """
-        self.block_size = block_sizes if block_sizes is not None else {0: 48, 1: 6}
+        self.block_size = (block_sizes if
+                           block_sizes is not None else {0: 48, 1: 6})
         self.target_cape = target_cape
         self.phi_cape = cape_reversion_speed
         self.gamma_cape = valuation_drag_coef
@@ -1255,14 +1339,16 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
             regime_labels = label_regimes(returns_data.index)
         regime_labels = regime_labels.reindex(returns_data.index)
 
-        cols = ["spx_log_return", "cpi_log_return", "yield_3m_diff", "yield_5y_diff"]
+        cols = ["spx_log_return", "cpi_log_return",
+                "yield_3m_diff", "yield_5y_diff"]
         for state in (0, 1):
             mask = (regime_labels == state).values
             self.pool[state] = returns_data.loc[mask, cols].values
             if len(self.pool[state]) <= self.block_size[state]:
                 raise ValueError(
-                    f"Regime {state} has only {len(self.pool[state])} historical "
-                    f"months, not enough for block_size={self.block_size[state]}.")
+                    f"Regime {state} has only {len(self.pool[state])} "
+                    f"historical months, not enough for block_size="
+                    f"{self.block_size[state]}.")
 
         # Empirical transition rates via events/exposure counting, corrected
         # for boundary censoring. Naive adjacent-month transition counting
@@ -1279,10 +1365,13 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         labels_arr = regime_labels.values
         n0 = int((labels_arr == 0).sum())
         n1 = int((labels_arr == 1).sum())
-        transitions_01 = int(np.sum((labels_arr[:-1] == 0) & (labels_arr[1:] == 1)))
-        transitions_10 = int(np.sum((labels_arr[:-1] == 1) & (labels_arr[1:] == 0)))
+        transitions_01 = int(
+            np.sum((labels_arr[:-1] == 0) & (labels_arr[1:] == 1)))
+        transitions_10 = int(
+            np.sum((labels_arr[:-1] == 1) & (labels_arr[1:] == 0)))
         if labels_arr[0] == 1:
-            transitions_01 += 1  # left-censored entry, occurred before the window
+            # left-censored entry, occurred before the window
+            transitions_01 += 1
         if labels_arr[-1] == 1:
             transitions_10 += 1  # right-censored exit, occurs after the window
 
@@ -1294,7 +1383,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         # Global (not per-regime) unconditional mean, used to de-mean the
         # stochastic shock -- see class docstring for why.
         self.historical_spx_mean = float(returns_data["spx_log_return"].mean())
-        self.expected_inflation = float(returns_data["cpi_log_return"].mean() * 12)
+        self.expected_inflation = float(
+            returns_data["cpi_log_return"].mean() * 12)
 
         self.initial_spx_level = float(levels_data["spx_close"].iloc[-1])
         self.initial_cpi_level = float(levels_data["cpi"].iloc[-1])
@@ -1307,7 +1397,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
             self.target_yield_5y = float(levels_data["yield_5y"].mean())
 
     def simulate_paths(
-        self, simulation_months: int = 360, num_paths: int = 10000, seed: Optional[int] = None
+        self, simulation_months: int = 360,
+        num_paths: int = 10000, seed: Optional[int] = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Parameters:
@@ -1333,13 +1424,14 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         # Step 1: vectorized regime path generation (identical mechanism to
         # RegimeSwitchingBootstrapSimulator).
         regime_path = np.zeros((num_paths, simulation_months), dtype=int)
-        regime_path[:, 0] = rng.choice([0, 1], size=num_paths, p=self.stationary_dist)
+        regime_path[:, 0] = rng.choice(
+            [0, 1], size=num_paths, p=self.stationary_dist)
         rand_draws = rng.random((num_paths, simulation_months - 1))
         for t in range(1, simulation_months):
             prev = regime_path[:, t - 1]
             p_switch = np.where(prev == 0,
-                                 self.transition_matrix[0, 1],
-                                 self.transition_matrix[1, 0])
+                                self.transition_matrix[0, 1],
+                                self.transition_matrix[1, 0])
             switched = rand_draws[:, t - 1] < p_switch
             regime_path[:, t] = np.where(switched, 1 - prev, prev)
 
@@ -1351,7 +1443,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
             while t < simulation_months:
                 regime = regime_path[path_idx, t]
                 run_end = t
-                while run_end < simulation_months and regime_path[path_idx, run_end] == regime:
+                while (run_end < simulation_months and
+                       regime_path[path_idx, run_end] == regime):
                     run_end += 1
                 run_length = run_end - t
 
@@ -1381,7 +1474,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
 
         log_cape = np.full(num_paths, np.log(self.initial_cape))
         log_target_cape = np.log(self.target_cape)
-        equilibrium_equity_drift = (self.earnings_growth + self.expected_inflation) * dt
+        equilibrium_equity_drift = (
+            self.earnings_growth + self.expected_inflation) * dt
 
         for step in range(simulation_months):
             raw = increments[:, step, :]
@@ -1389,11 +1483,14 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
             spx_stochastic_shock = raw[:, 0] - self.historical_spx_mean
             valuation_gap = log_cape - log_target_cape
             valuation_penalty = -self.gamma_cape * valuation_gap * dt
-            spx_log_ret = equilibrium_equity_drift + spx_stochastic_shock + valuation_penalty
+            spx_log_ret = (equilibrium_equity_drift + spx_stochastic_shock +
+                           valuation_penalty)
 
             cpi_log_ret = raw[:, 1]
-            diff_3m = raw[:, 2] - self.phi_rate * (curr_3m - self.target_yield_3m) * dt
-            diff_5y = raw[:, 3] - self.phi_rate * (curr_5y - self.target_yield_5y) * dt
+            diff_3m = raw[:, 2] - self.phi_rate * (
+                curr_3m - self.target_yield_3m) * dt
+            diff_5y = raw[:, 3] - self.phi_rate * (
+                curr_5y - self.target_yield_5y) * dt
 
             curr_spx *= np.exp(spx_log_ret)
             curr_cpi *= np.exp(cpi_log_ret)

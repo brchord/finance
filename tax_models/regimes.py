@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple, override
 
+
 @dataclass(frozen=True)
 class BracketTable:
     """
@@ -39,22 +40,30 @@ class BracketTable:
     standard_deduction: float
 
     def tax_on(self, taxable_income: float) -> float:
-        """Marginal-bracket tax on taxable income (already net of deduction)."""
+        """
+        Marginal-bracket tax on taxable income (already net of deduction).
+        """
         if taxable_income <= 0:
             return 0.0
         tax = 0.0
         for i, (rate, floor) in enumerate(self.brackets):
-            next_floor = self.brackets[i + 1][1] if i + 1 < len(self.brackets) else None
-            top = min(taxable_income, next_floor) if next_floor is not None else taxable_income
+            next_floor = (self.brackets[i + 1][1]
+                          if i + 1 < len(self.brackets) else None)
+            top = (min(taxable_income, next_floor)
+                   if next_floor is not None else taxable_income)
             if top <= floor:
                 break
             tax += (top - floor) * rate
         return tax
 
     def scaled(self, factor: float) -> "BracketTable":
-        """New table with every dollar threshold (and the deduction) scaled by `factor`."""
+        """
+        New table with every dollar threshold (and the deduction) scaled by
+        `factor`.
+        """
         return BracketTable(
-            brackets=tuple((rate, floor * factor) for rate, floor in self.brackets),
+            brackets=tuple((rate, floor * factor) for rate,
+                           floor in self.brackets),
             standard_deduction=self.standard_deduction * factor,
         )
 
@@ -79,10 +88,12 @@ class NIITRule:
 class AnnualTaxLaw:
     """Fully resolved tax law for one simulated calendar year, for one path."""
     ordinary: BracketTable
-    ltcg: BracketTable  # dollar thresholds only; the 0/15/20% structure lives in `brackets`
+    # dollar thresholds only; the 0/15/20% structure lives in `brackets`
+    ltcg: BracketTable
     niit: NIITRule
 
-    def compute_tax(self, ordinary_income: float, preferential_income: float) -> float:
+    def compute_tax(self, ordinary_income: float,
+                    preferential_income: float) -> float:
         """
         Total federal tax owed for one calendar year.
 
@@ -120,7 +131,8 @@ class AnnualTaxLaw:
         # ordinary_taxable + preferential_taxable] -- not from zero.
         stack_floor = ordinary_taxable
         stack_ceiling = ordinary_taxable + preferential_taxable
-        preferential_tax = self.ltcg.tax_on(stack_ceiling) - self.ltcg.tax_on(stack_floor)
+        preferential_tax = (self.ltcg.tax_on(stack_ceiling) -
+                            self.ltcg.tax_on(stack_floor))
 
         niit_threshold = self.niit.threshold_single
         niit_tax = self.niit.rate * max(0.0, total_income - niit_threshold)
@@ -153,9 +165,11 @@ BASELINE_2026_SINGLE = AnnualTaxLaw(
             (0.15, 49_450),
             (0.20, 545_500),
         ),
-        standard_deduction=16_100,  # same deduction pool; don't double-apply it (see resolve())
+        # same deduction pool; don't double-apply it (see resolve())
+        standard_deduction=16_100,
     ),
-    niit=NIITRule(rate=0.038, threshold_single=200_000, threshold_joint=250_000, indexed=False),
+    niit=NIITRule(rate=0.038, threshold_single=200_000,
+                  threshold_joint=250_000, indexed=False),
 )
 
 
@@ -201,7 +215,8 @@ class CurrentLawIndexed(TaxRegimeScenario):
         return AnnualTaxLaw(
             ordinary=self.baseline.ordinary.scaled(cpi_relative_to_start),
             ltcg=self.baseline.ltcg.scaled(cpi_relative_to_start),
-            niit=self.baseline.niit,  # unchanged: NIIT thresholds are nominal-frozen by design
+            niit=self.baseline.niit,  # unchanged: NIIT thresholds are
+            # nominal-frozen by design
         )
 
 
@@ -221,7 +236,8 @@ class HistoricalAverageDrift(TaxRegimeScenario):
     not just the top rate, since 1986-1990 had only 2-3 brackets).
     """
 
-    def __init__(self, name, baseline, target_top_rate: float, drift_years: int):
+    def __init__(self, name, baseline,
+                 target_top_rate: float, drift_years: int):
         super().__init__(name, baseline)
         self.target_top_rate = target_top_rate
         self.drift_years = drift_years
@@ -230,7 +246,8 @@ class HistoricalAverageDrift(TaxRegimeScenario):
     def resolve(self, year, cpi_relative_to_start):
         progress = min(1.0, year / max(1, self.drift_years))
         base_top_rate = self.baseline.ordinary.brackets[-1][0]
-        drifted_top_rate = base_top_rate + progress * (self.target_top_rate - base_top_rate)
+        drifted_top_rate = base_top_rate + progress * (
+            self.target_top_rate - base_top_rate)
 
         drifted_brackets = self.baseline.ordinary.brackets[:-1] + (
             (drifted_top_rate, self.baseline.ordinary.brackets[-1][1]),
@@ -257,14 +274,17 @@ class RegimeSwitchAtYear(TaxRegimeScenario):
     average it away.
     """
 
-    def __init__(self, name, baseline, switch_year: int, alternate_law: AnnualTaxLaw):
+    def __init__(self, name, baseline, switch_year: int,
+                 alternate_law: AnnualTaxLaw):
         super().__init__(name, baseline)
         self.switch_year = switch_year
         self.alternate_law = alternate_law
 
     @override
     def resolve(self, year, cpi_relative_to_start):
-        active = self.baseline if year < self.switch_year else self.alternate_law
+        active = (self.baseline
+                  if year < self.switch_year
+                  else self.alternate_law)
         return AnnualTaxLaw(
             ordinary=active.ordinary.scaled(cpi_relative_to_start),
             ltcg=active.ltcg.scaled(cpi_relative_to_start),
@@ -300,7 +320,8 @@ PRE_TCJA_STYLE_SINGLE = AnnualTaxLaw(
         ),
         standard_deduction=8_500,
     ),
-    niit=NIITRule(rate=0.038, threshold_single=200_000, threshold_joint=250_000, indexed=False),
+    niit=NIITRule(rate=0.038, threshold_single=200_000,
+                  threshold_joint=250_000, indexed=False),
 )
 
 
@@ -338,6 +359,6 @@ def build_tax_regime(name: str) -> Optional[TaxRegimeScenario]:
 
     raise ValueError(
         f"Unknown tax_regime '{name}'. Supported: "
-        "none, current_law_indexed, historical_average_drift, pre_tcja_reversion"
+        "none, current_law_indexed, historical_average_drift, "
+        "pre_tcja_reversion"
     )
-

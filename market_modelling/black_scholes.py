@@ -8,6 +8,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
 def norm_cdf(x: float):
     """
     Represents the cumulative distribution
@@ -31,10 +32,12 @@ def option_price(spot: float, strike: float, expiration: float,
     logging.debug("Is Call?:  %s", str(is_call))
 
     t = max(expiration, 1e-5)
-    d1 = (np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
+    d1 = ((np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) /
+          (sigma * np.sqrt(t)))
     d2 = d1 - sigma * np.sqrt(t)
     if is_call:
-        return spot * norm_cdf(d1) - strike * np.exp(-rf_rate * t) * norm_cdf(d2)
+        return (spot * norm_cdf(d1) -
+                strike * np.exp(-rf_rate * t) * norm_cdf(d2))
     return strike * np.exp(-rf_rate * t) * norm_cdf(-d2) - spot * norm_cdf(-d1)
 
 
@@ -45,7 +48,8 @@ def option_delta(spot: float, strike: float, expiration: float,
     options pricing model.
     """
     t = max(expiration, 1e-5)
-    d1 = (np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) / (sigma * np.sqrt(t))
+    d1 = ((np.log(spot / strike) + (rf_rate + 0.5 * sigma**2) * t) /
+          (sigma * np.sqrt(t)))
     if is_call:
         return norm_cdf(d1)
     return norm_cdf(d1) - 1.0

@@ -27,6 +27,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
 class IBKRSPXMarketData:
     """
     Retrieves SPX and VIX market data from the IBKR
@@ -64,31 +65,37 @@ class IBKRSPXMarketData:
     DIST_FROM_SPOT = 0.10
 
     def __init__(self):
-        # Bypass self-signed certificate errors common to the local IBKR gateway.
+        # Bypass self-signed certificate errors common to the local IBKR
+        # gateway.
         self.ssl_context = ssl._create_unverified_context()
         self.spx_contract_data = None
         self.vix_contract_data = None
         self.vix3m_contract_data = None
 
-
     def _get_request(self, endpoint: str) -> dict:
-        """Performs an out-of-the-box REST GET request against the local IBKR gateway."""
+        """
+        Performs an out-of-the-box REST GET request against the local IBKR
+        gateway.
+        """
         url = f"{IBKRSPXMarketData.BASE_URL}/{endpoint.lstrip('/')}"
 
         logging.debug("Sending request to %s", url)
 
-        # Standard spoof header so local gateways accept the incoming connection smoothly
-        #headers = {"User-Agent": "Python-urllib"}
-        req = urllib.request.Request(url) #, headers=headers)
+        # Standard spoof header so local gateways accept the incoming
+        # connection smoothly.
+        headers = {"User-Agent": "Python-urllib"}
+        req = urllib.request.Request(url, headers=headers)
 
         try:
             # Pass the unverified context directly to urlopen
-            with urllib.request.urlopen(req, context=self.ssl_context) as response:
+            with urllib.request.urlopen(req,
+                                        context=self.ssl_context) as response:
                 raw_data = response.read().decode("utf-8")
                 return json.loads(raw_data)
 
         except urllib.error.HTTPError as e:
-            logging.error("HTTP Error %d: %s", e.code, e.read().decode('utf-8'))
+            logging.error(
+                "HTTP Error %d: %s", e.code, e.read().decode('utf-8'))
             return {}
         except urllib.error.URLError as e:
             logging.error("Network / Gateway Connection Error: %s", e.reason)
@@ -115,9 +122,9 @@ class IBKRSPXMarketData:
 
         # Encode into a query string
         query_string = urlencode(query_params)
-        endpoint_url = f"{IBKRSPXMarketData.HIST_DATA_ENDPOINT}?{query_string}-00:00:00"
+        endpoint_url = f"{IBKRSPXMarketData.HIST_DATA_ENDPOINT}?" + \
+                       f"{query_string}-00:00:00"
         return self._get_request(endpoint_url)
-
 
     def _initialize_spx(self):
         """
@@ -127,9 +134,9 @@ class IBKRSPXMarketData:
         """
         if not self.spx_contract_data:
             # Query the SPX contract ID to initialize the IBKR client.
-            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}?symbol=SPX"
+            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}"
+            con_endpoint_url += "?symbol=SPX"
             self.spx_contract_data = self._get_request(con_endpoint_url)
-
 
     def _initialize_vix(self):
         """
@@ -139,15 +146,16 @@ class IBKRSPXMarketData:
         """
         if not self.vix_contract_data:
             # Query the VIX contract ID to initialize the IBKR client.
-            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}?symbol=VIX"
+            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}"
+            con_endpoint_url += "?symbol=VIX"
             self.vix_contract_data = self._get_request(con_endpoint_url)
 
     def _initialize_vix3m(self):
         if not self.vix3m_contract_data:
             # Query the VIX contract ID to initialize the IBKR client.
-            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}?symbol=VIX3M"
+            con_endpoint_url = f"{IBKRSPXMarketData.CON_SEARCH_ENDPOINT}"
+            con_endpoint_url += "?symbol=VIX3M"
             self.vix3m_contract_data = self._get_request(con_endpoint_url)
-
 
     def spx_historical_data(self, end_date: date) -> dict:
         """
@@ -155,8 +163,8 @@ class IBKRSPXMarketData:
         end_date: Date from where the data will go back in time.
         """
         self._initialize_spx()
-        return self._get_historical_data(IBKRSPXMarketData.SPX_CON_ID, end_date)
-
+        return self._get_historical_data(
+            IBKRSPXMarketData.SPX_CON_ID, end_date)
 
     def vix_historial_data(self, end_date: date) -> dict:
         """
@@ -164,7 +172,8 @@ class IBKRSPXMarketData:
         end_date: Date from where the data will go back in time.
         """
         self._initialize_vix()
-        return self._get_historical_data(IBKRSPXMarketData.VIX_CON_ID, end_date)
+        return self._get_historical_data(
+            IBKRSPXMarketData.VIX_CON_ID, end_date)
 
     def vix3m_historial_data(self, end_date: date) -> dict:
         """
@@ -172,8 +181,8 @@ class IBKRSPXMarketData:
         end_date: Date from where the data will go back in time.
         """
         self._initialize_vix3m()
-        return self._get_historical_data(IBKRSPXMarketData.VIX3M_CON_ID, end_date)
-
+        return self._get_historical_data(
+            IBKRSPXMarketData.VIX3M_CON_ID, end_date)
 
     def _get_vix_spot(self) -> float:
         hist_data = self._get_historical_data(
@@ -181,30 +190,29 @@ class IBKRSPXMarketData:
         last_candle = hist_data["data"][-1]
         return last_candle["c"]
 
-
     def _get_spx_spot(self) -> float:
         hist_data = self._get_historical_data(
             IBKRSPXMarketData.SPX_CON_ID, date.today(), "1w", "1w")
         last_candle = hist_data["data"][-1]
         return last_candle["c"]
 
-
-    def _get_live_market_data(self, conids: list[str], fields: list[str]) -> dict:
+    def _get_live_market_data(
+            self, conids: list[str], fields: list[str]) -> dict:
         """
         Retrieves live market data for the given contract ids
         querying the desired field IDs.
         """
         query_string = f"conids={",".join(conids)}&fields={",".join(fields)}"
-        api_url = f"{IBKRSPXMarketData.LIVE_MARKET_DATA_ENDPOINT}?{query_string}"
+        api_url = f"{IBKRSPXMarketData.LIVE_MARKET_DATA_ENDPOINT}" + \
+                  f"?{query_string}"
         data = self._get_request(api_url)
         return data
-
 
     def _get_strikes_per_maturity(
             self, spx_spot, maturity, option_type="call") -> dict[int, str]:
         spx_low = spx_spot * (1 - IBKRSPXMarketData.DIST_FROM_SPOT)
         spx_low = math.floor(spx_low / 100.0) * 100
-        spx_hi = spx_spot # (1 + IBKRSPXMarketData.DIST_FROM_SPOT)
+        spx_hi = spx_spot
         spx_hi = math.ceil(spx_hi)
         curr_strike = spx_low
         option_contract_map = {}
@@ -219,9 +227,11 @@ class IBKRSPXMarketData:
                 "right": "C" if option_type == "call" else "P"
             }
             query_string = urlencode(query_params)
-            strike_check_url = f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}?{query_string}"
+            strike_check_url = f"{IBKRSPXMarketData.STRIKE_CHECK_ENDPOINT}" + \
+                               f"?{query_string}"
             opt_contracts = self._get_request(strike_check_url)
-            monthlies = [c for c in opt_contracts if c["tradingClass"] == "SPX"]
+            monthlies = [
+                c for c in opt_contracts if c["tradingClass"] == "SPX"]
             if len(monthlies) > 0:
                 c = monthlies[0]
                 option_contract_map[curr_strike] = c["conid"]
@@ -230,8 +240,8 @@ class IBKRSPXMarketData:
         assert len(expiration_set) == 1
         return list(expiration_set)[0], option_contract_map
 
-
-    def _get_strike_contracts(self, spx_spot, option_type="call") -> dict[int, str]:
+    def _get_strike_contracts(
+            self, spx_spot, option_type="call") -> dict[int, str]:
         opt_contract_data = [x for x in self.spx_contract_data[0]["sections"]
                              if x["secType"] == "OPT"]
         opt_maturities = opt_contract_data[0]["months"].split(";")[1:4]
@@ -242,7 +252,8 @@ class IBKRSPXMarketData:
                 "month": m
             }
             query_string = urlencode(query_params)
-            strike_endpoint_url = f"{IBKRSPXMarketData.STRIKES_ENDPOINT}?{query_string}"
+            strike_endpoint_url = f"{IBKRSPXMarketData.STRIKES_ENDPOINT}"
+            strike_endpoint_url += f"?{query_string}"
             _ = self._get_request(strike_endpoint_url)
         options_chain = {}
         with ThreadPoolExecutor(max_workers=len(opt_maturities)) as executor:
@@ -255,7 +266,6 @@ class IBKRSPXMarketData:
                 options_chain[opt_maturities[i]] = r
 
         return options_chain
-
 
     def spx_current_option_iv_surface(
             self, option_type="call") -> dict[str, list[tuple[float, str]]]:
@@ -287,14 +297,17 @@ class IBKRSPXMarketData:
         for _, chain in options_chain.items():
             maturity_date = chain[0]
             option_contracts = chain[1]
-            conid_map = {conid: strike for (strike, conid) in option_contracts.items()}
-            # Step 4. Retrieve each option implied volatility and then build a list
-            #         of pairs mapping strike -> IV% in strike ascending order.
+            conid_map = {
+                conid: strike for (strike, conid) in option_contracts.items()}
+            # Step 4. Retrieve each option implied volatility and then build a
+            #         list of pairs mapping strike -> IV% in strike ascending
+            #         order.
             retries = 3
             while retries > 0:
                 try:
                     market_data = self._get_live_market_data(
-                        [str(conid) for (_, conid) in option_contracts.items()],
+                        [str(conid) for
+                            (_, conid) in option_contracts.items()],
                         ["7633"])
                     logging.debug("First IV value: %s", market_data[0]["7633"])
                     break
@@ -344,7 +357,8 @@ class IBKRSPXMarketData:
                     surface_strikes[i] = pair[0]
                     iv = float(pair[1][:-1]) / 100.0
                     surface_ivs[i] = iv
-                surface_chain[surface_expiration] = (surface_strikes, surface_ivs)
+                surface_chain[surface_expiration] = (
+                    surface_strikes, surface_ivs)
             return surface_spot, surface_atm_iv, surface_chain
 
 
@@ -352,7 +366,8 @@ def parse_args():
     "Parse command line arguments"
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--historical-spx-vix-vix3m",
-                        help="Retrieve last year daily SPX, VIX and VIX3M data",
+                        help="Retrieve last year daily SPX, VIX and "
+                             "VIX3M data",
                         dest="historicals",
                         action="store_true")
     parser.add_argument("-v", "--spx-iv-surface",
@@ -372,9 +387,9 @@ def main():
     or SPX volatility smile.
     """
     logging.basicConfig(
-    format="%(asctime)s:%(filename)s:"
-            "%(lineno)d:%(levelname)s: %(message)s",
-    level=logging.DEBUG)
+        format="%(asctime)s:%(filename)s:"
+               "%(lineno)d:%(levelname)s: %(message)s",
+        level=logging.DEBUG)
     args = parse_args()
     ibkr = IBKRSPXMarketData()
 
@@ -404,13 +419,13 @@ def main():
         spx, vix, options_chain = \
             ibkr.spx_current_option_iv_surface(option_type=option_type)
         with open(args.output_file, "w", encoding="utf-8") as f:
-            json.dump({ "spot_spx": spx,
-                        "spot_vix": vix,
-                        "opt_chain": options_chain
-                        }, f)
+            json.dump({"spot_spx": spx,
+                       "spot_vix": vix,
+                       "opt_chain": options_chain}, f)
             return 0
 
     return 0
+
 
 if __name__ == "__main__":
     main()
