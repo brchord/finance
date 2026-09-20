@@ -13,8 +13,8 @@ import logging
 import os
 import time
 
-from concurrent.futures import ProcessPoolExecutor
-from typing import Optional, Tuple
+from concurrent.futures import Future, ProcessPoolExecutor
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -123,25 +123,19 @@ class MonteCarloEngine:
 
         return final_spx, final_navs, ruin_histogram
 
-    def run(
+    def submit(
         self,
+        executor: ProcessPoolExecutor,
         *,
         total_paths: int,
         n_workers: int
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> List[Future]:
         """
-        Spawns and manages parallel execution across available CPU cores.
-
-        Parameters:
-        -----------
-        total_paths : int, default=10000
-            Total Monte Carlo paths to generate and evaluate.
-        n_workers : int, default=8
-            Number of parallel process workers in the process pool.
-
-        Returns:
-        --------
-        Tuple containing (final_spx, final_navs, ruin_histogram)
+        Splits total_paths into chunks and submits them to an existing
+        executor without waiting for results, so several engines can keep the
+        same pool busy at once. Chunk seeds are drawn here, in submission
+        order, so results stay deterministic. Pass the returned futures to
+        collect().
         """
         chunk_size = total_paths // n_workers
         chunks = []
@@ -152,46 +146,76 @@ class MonteCarloEngine:
             chunks.append(current_batch_size)
             remaining_paths -= current_batch_size
 
+        return [
+            executor.submit(
+                MonteCarloEngine._execute_strategy_batch,
+                self.strategy,
+                self.path_sim,
+                self.simulation_months,
+                self.initial_nav,
+                batch_size,
+                int(self.rng.integers(1 << 31)),
+            )
+            for batch_size in chunks
+        ]
+
+    def collect(
+        self,
+        futures: List[Future],
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Blocks until the futures returned by submit() are done and assembles
+        their results.
+
+        Returns:
+        --------
+        Tuple containing (final_spx, final_navs, ruin_histogram)
+        """
         all_final_spx = []
         all_final_navs = []
         full_ruin_histogram = np.zeros(self.simulation_months)
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = [
-                executor.submit(
-                    MonteCarloEngine._execute_strategy_batch,
-                    self.strategy,
-                    self.path_sim,
-                    self.simulation_months,
-                    self.initial_nav,
-                    batch_size,
-                    int(self.rng.integers(1 << 31)),
-                )
-                for batch_size in chunks
-            ]
-
-            # Iterate futures in their original submission order rather than
-            # as_completed()'s finish order. Submission (and each chunk's
-            # seed) is already deterministic; only the assembly order was
-            # not, which silently permuted which array position each
-            # simulated path landed in from run to run. All futures are
-            # already running concurrently by this point, so this costs
-            # nothing -- it only changes which already-submitted future
-            # .result() blocks on next.
-            for future in futures:
-                f_spx, f_navs, f_ruin_histograms = future.result()
-                all_final_spx.append(f_spx)
-                all_final_navs.append(f_navs)
-                full_ruin_histogram += f_ruin_histograms
-
-        concatenated_spx = np.concatenate(all_final_spx)
-        concatenated_navs = np.concatenate(all_final_navs)
+        # Iterate futures in their original submission order rather than
+        # as_completed()'s finish order. Submission (and each chunk's seed)
+        # is already deterministic; only the assembly order was not, which
+        # silently permuted which array position each simulated path landed
+        # in from run to run.
+        for future in futures:
+            f_spx, f_navs, f_ruin_histograms = future.result()
+            all_final_spx.append(f_spx)
+            all_final_navs.append(f_navs)
+            full_ruin_histogram += f_ruin_histograms
 
         return (
-            concatenated_spx,
-            concatenated_navs,
+            np.concatenate(all_final_spx),
+            np.concatenate(all_final_navs),
             full_ruin_histogram
         )
+
+    def run(
+        self,
+        *,
+        total_paths: int,
+        n_workers: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Convenience wrapper: runs this engine alone on its own process pool.
+
+        Parameters:
+        -----------
+        total_paths : int
+            Total Monte Carlo paths to generate and evaluate.
+        n_workers : int
+            Number of parallel process workers in the process pool.
+
+        Returns:
+        --------
+        Tuple containing (final_spx, final_navs, ruin_histogram)
+        """
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = self.submit(
+                executor, total_paths=total_paths, n_workers=n_workers)
+            return self.collect(futures)
 
 
 class MonteCarloCLI:
@@ -387,56 +411,73 @@ class MonteCarloCLI:
         cell_key = None
         cell_seed = None
 
-        for p in portfolios:
-            model_name = p["model"]
-            m = self.model_map[model_name]
-            logging.info("Running simulation #%d out of %d. Progress: %.2f%%",
-                         i + 1, total, 100.0 * (i + 1) / total)
-            logging.info("Model: %s, Tax Regime: %s, Yearly Spending: $%.2f, "
-                         "Equity: %.2f%%", model_name, p["tax_regime"],
-                         p["yearly_spending"], p["equity_allocation"] * 100.0)
-            setup_start = time.perf_counter()
+        # One pool for the whole run. Every portfolio's chunks are submitted
+        # up front (fitting the next portfolio while workers crunch the
+        # previous ones), so workers never idle waiting on the slowest chunk
+        # of a portfolio or on serial setup. Results are collected in
+        # portfolio order, so output is identical to running them one by one.
+        pending = []
+        with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
+            for p in portfolios:
+                model_name = p["model"]
+                m = self.model_map[model_name]
+                logging.info(
+                    "Submitting simulation #%d out of %d. Progress: %.2f%%",
+                    i + 1, total, 100.0 * (i + 1) / total)
+                logging.info(
+                    "Model: %s, Tax Regime: %s, Yearly Spending: $%.2f, "
+                    "Equity: %.2f%%", model_name, p["tax_regime"],
+                    p["yearly_spending"], p["equity_allocation"] * 100.0)
+                setup_start = time.perf_counter()
 
-            simulator = m()
-            simulator.fit(returns, levels)
+                simulator = m()
+                simulator.fit(returns, levels)
 
-            new_cell_key = (model_name, p["equity_allocation"],
-                            p["yearly_spending"])
-            if new_cell_key != cell_key:
-                cell_key = new_cell_key
-                cell_seed = int(rng.integers(1 << 32))
+                new_cell_key = (model_name, p["equity_allocation"],
+                                p["yearly_spending"])
+                if new_cell_key != cell_key:
+                    cell_key = new_cell_key
+                    cell_seed = int(rng.integers(1 << 32))
 
-            strategy = lm.LongSPYWithTreasuryLadders.from_json_object(p)
-            mc = MonteCarloEngine(strategy, simulator, config.years * 12,
-                                  config.initial_nav, cell_seed)
-            setup_end = time.perf_counter()
+                strategy = lm.LongSPYWithTreasuryLadders.from_json_object(p)
+                mc = MonteCarloEngine(strategy, simulator, config.years * 12,
+                                      config.initial_nav, cell_seed)
+                futures = mc.submit(executor, total_paths=config.total_paths,
+                                    n_workers=config.n_workers)
+                setup_end = time.perf_counter()
 
-            perf_counters[model_name]["setup"].append(setup_end - setup_start)
+                perf_counters[model_name]["setup"].append(
+                    setup_end - setup_start)
+                pending.append((p, mc, futures))
+                i += 1
 
-            sim_start = time.perf_counter()
-            spx, nav, ruin_histogram = mc.run(
-                total_paths=config.total_paths, n_workers=config.n_workers)
-            sim_end = time.perf_counter()
+            for p, mc, futures in pending:
+                model_name = p["model"]
+                # Time spent blocked waiting on this portfolio's results;
+                # simulation itself overlaps with other portfolios' setup.
+                sim_start = time.perf_counter()
+                spx, nav, ruin_histogram = mc.collect(futures)
+                sim_end = time.perf_counter()
 
-            perf_counters[model_name]["simulation"].append(sim_end - sim_start)
+                perf_counters[model_name]["simulation"].append(
+                    sim_end - sim_start)
 
-            data_start = time.perf_counter()
-            run_output = {
-                    "Terminal SPX": spx.tolist(),
-                    "Terminal NAV": nav.tolist()
-            }
-            results["simulations"][model_name].append({
-                "spending": p["yearly_spending"],
-                "equity": p["equity_allocation"],
-                "ladder": p["ladder_allocation"],
-                "tax_regime": p["tax_regime"],
-                "ruin_histogram": ruin_histogram.tolist(),
-                "results": run_output
-            })
-            data_end = time.perf_counter()
-            perf_counters[model_name]["data_storage"].append(
-                data_end - data_start)
-            i += 1
+                data_start = time.perf_counter()
+                run_output = {
+                        "Terminal SPX": spx.tolist(),
+                        "Terminal NAV": nav.tolist()
+                }
+                results["simulations"][model_name].append({
+                    "spending": p["yearly_spending"],
+                    "equity": p["equity_allocation"],
+                    "ladder": p["ladder_allocation"],
+                    "tax_regime": p["tax_regime"],
+                    "ruin_histogram": ruin_histogram.tolist(),
+                    "results": run_output
+                })
+                data_end = time.perf_counter()
+                perf_counters[model_name]["data_storage"].append(
+                    data_end - data_start)
 
         results["perf_data"] = perf_counters
         self.raw_results = results

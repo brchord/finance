@@ -4,9 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# MonteCarloEngine spawns a fresh process pool per portfolio. Under pytest the
-# forkserver's workers would otherwise re-import monte_carlo (pandas,
-# yfinance, ...) every time, which dominates the runtime of the MC tests.
+# Each MonteCarloCLI.run() / MonteCarloEngine.run() starts a fresh process
+# pool. Under pytest the forkserver's workers would otherwise re-import
+# monte_carlo (pandas, yfinance, ...) every time, which dominates the runtime
+# of the MC tests.
 multiprocessing.set_forkserver_preload(["monte_carlo"])
 
 
