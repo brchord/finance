@@ -1003,11 +1003,13 @@ def label_regimes(
         nber_cycles = NBER_BUSINESS_CYCLES
 
     labels = pd.Series(0, index=monthly_index, dtype=int)
+    # Compare on calendar months so month-start and month-end indexes label
+    # identically.
+    months = monthly_index.to_period("M")
     for peak_str, trough_str in nber_cycles:
-        contraction_start = pd.Timestamp(peak_str) + pd.DateOffset(months=1)
-        contraction_end = pd.Timestamp(trough_str)
-        mask = ((monthly_index >= contraction_start) &
-                (monthly_index <= contraction_end))
+        contraction_start = pd.Timestamp(peak_str).to_period("M") + 1
+        contraction_end = pd.Timestamp(trough_str).to_period("M")
+        mask = (months >= contraction_start) & (months <= contraction_end)
         labels[mask] = 1
     return labels
 

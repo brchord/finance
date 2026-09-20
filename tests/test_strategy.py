@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -32,6 +34,11 @@ class TestConstruction:
     def test_allocations_must_sum_to_one(self):
         with pytest.raises(ValueError, match="100%"):
             LSTL(0.5, 0.4, 1000.0)
+
+    @pytest.mark.parametrize("spending", [0.0, -1000.0])
+    def test_spending_must_be_positive(self, spending):
+        with pytest.raises(ValueError, match="non-positive"):
+            LSTL(0.6, 0.4, spending)
 
     def test_from_json_object(self):
         s = LSTL.from_json_object({
@@ -95,9 +102,10 @@ class TestConservation:
 
 
 class TestRuin:
-    @pytest.mark.filterwarnings("ignore:invalid value:RuntimeWarning")
     def test_ruined_path_is_zero_filled(self):
-        _, path = run(1.0, 0.0, 120_000, nav=100_000.0, months=24)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # e.g. 0/0 RuntimeWarning
+            _, path = run(1.0, 0.0, 120_000, nav=100_000.0, months=24)
         # 10k/month withdrawals against 100k NAV: gone after month 10.
         assert path[8] == pytest.approx(10_000)
         assert path[9] == 0.0

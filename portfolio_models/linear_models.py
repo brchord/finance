@@ -183,6 +183,8 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
         if not math.isclose(equity_allocation + ladder_allocation,
                             1.0, abs_tol=1e-4):
             raise ValueError("Portfolio allocation must sum up to 100%")
+        if yearly_spending <= 0:
+            raise ValueError("Yearly spending cannot be non-positive")
         super().__init__()
         self.equity_allocation = equity_allocation
         self.ladder_allocation = ladder_allocation
@@ -438,7 +440,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
             fixed_income_position = cash + tnote_position
 
             # Strategic Equity Rebalancing into Fixed Income
-            if (fixed_income_position / current_nav
+            if current_nav > 0 and (fixed_income_position / current_nav
                <= self.ladder_allocation * 0.8):
                 if (m >= 9 and day_spy >= sma2[m] and day_spy >= sma4[m]
                    and day_spy >= sma9[m]):

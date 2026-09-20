@@ -123,6 +123,19 @@ class TestLabelRegimes:
     def test_month_after_trough_is_expansion(self):
         assert self.label("2009-07-01") == 0
 
+    def test_month_end_index_matches_month_start(self):
+        me = pd.date_range("2007-10-01", "2009-09-30", freq="ME")
+        labels_me = ps.label_regimes(me)
+        labels_ms = ps.label_regimes(self.index)
+        assert labels_me.tolist() == labels_ms.tolist()
+
+    def test_month_end_trough_month_is_contraction(self):
+        me = pd.date_range("2007-10-01", "2009-09-30", freq="ME")
+        labels = ps.label_regimes(me)
+        assert labels[pd.Timestamp("2009-06-30")] == 1
+        assert labels[pd.Timestamp("2007-12-31")] == 0
+        assert labels[pd.Timestamp("2009-07-31")] == 0
+
     def test_custom_cycles(self):
         labels = ps.label_regimes(
             pd.date_range("2000-01-01", periods=6, freq="MS"),
