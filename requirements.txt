@@ -1,0 +1,4 @@
+numpy==2.5.3
+pandas==3.0.6
+fastparquet==2026.5.0
+yfinance==1.7.0

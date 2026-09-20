@@ -10,6 +10,22 @@
 Run a single module or test with the usual pytest selectors, e.g.
 `.venv/bin/python -m pytest tests/test_strategy.py -k Ruin`.
 
+## Dependencies and CI
+
+- `requirements.txt` holds the pinned runtime dependencies;
+  `requirements-dev.txt` adds pytest, mypy and pandas-stubs. Keep the pins in
+  sync with the venv: the golden snapshot compares floats to `rel=1e-6`, so
+  numpy/pandas version changes can move it.
+- `.github/workflows/tests.yml` runs mypy and pytest on every push and pull
+  request (Python 3.14, fresh install from `requirements-dev.txt`). Reproduce
+  it locally with a clean venv:
+
+```
+python3 -m venv /tmp/ci-venv
+/tmp/ci-venv/bin/pip install -r requirements-dev.txt
+/tmp/ci-venv/bin/python -m mypy . && /tmp/ci-venv/bin/python -m pytest -q
+```
+
 ## Test setup
 
 - `tests/conftest.py` builds a **synthetic, seeded** daily market cache
