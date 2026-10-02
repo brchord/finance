@@ -14,80 +14,80 @@
         "ruin_month_median": 116.0,
         "ruin_month_es5": 116.0,
         "ruin_month_es10": 116.0,
-        "p5_return": -0.9676546469246732,
-        "p10_return": -0.7675626749076607,
-        "p25_return": -0.5940936166329844,
-        "p50_return": -0.46284563462532335
+        "p5_return": -0.9690498142112098,
+        "p10_return": -0.7655500938016397,
+        "p25_return": -0.6006202906426977,
+        "p50_return": -0.44657654478216513
       },
       {
         "spending": 80000,
         "allocation": "50-50",
         "tax_regime": "current_law_indexed",
-        "ruin_path_count": 1,
-        "ruin_month_min": 116,
-        "ruin_month_median": 116.0,
-        "ruin_month_es5": 116.0,
-        "ruin_month_es10": 116.0,
-        "p5_return": -0.9701124067273114,
-        "p10_return": -0.7567690365248536,
-        "p25_return": -0.5930067750880558,
-        "p50_return": -0.45410560174410913
-      },
-      {
-        "spending": 90000,
-        "allocation": "50-50",
-        "tax_regime": "none",
-        "ruin_path_count": 0,
-        "ruin_month_min": null,
-        "ruin_month_median": null,
-        "ruin_month_es5": null,
-        "ruin_month_es10": null,
-        "p5_return": -0.8076258799693207,
-        "p10_return": -0.7630225695500339,
-        "p25_return": -0.5355866248824823,
-        "p50_return": -0.40852119895836614
-      },
-      {
-        "spending": 90000,
-        "allocation": "50-50",
-        "tax_regime": "current_law_indexed",
-        "ruin_path_count": 0,
-        "ruin_month_min": null,
-        "ruin_month_median": null,
-        "ruin_month_es5": null,
-        "ruin_month_es10": null,
-        "p5_return": -0.7932815511090208,
-        "p10_return": -0.7617850584882295,
-        "p25_return": -0.5282954979565556,
-        "p50_return": -0.41200654450318414
-      },
-      {
-        "spending": 80000,
-        "allocation": "60-40",
-        "tax_regime": "none",
         "ruin_path_count": 1,
         "ruin_month_min": 118,
         "ruin_month_median": 118.0,
         "ruin_month_es5": 118.0,
         "ruin_month_es10": 118.0,
-        "p5_return": -0.9082714472246931,
-        "p10_return": -0.806299652789204,
-        "p25_return": -0.6664219649027421,
-        "p50_return": -0.3847915374760374
+        "p5_return": -0.9698330055389122,
+        "p10_return": -0.765886346627311,
+        "p25_return": -0.5969000745130593,
+        "p50_return": -0.46518454458534964
+      },
+      {
+        "spending": 90000,
+        "allocation": "50-50",
+        "tax_regime": "none",
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.7794438201177026,
+        "p10_return": -0.7508520721479688,
+        "p25_return": -0.5265566698705016,
+        "p50_return": -0.403529609690753
+      },
+      {
+        "spending": 90000,
+        "allocation": "50-50",
+        "tax_regime": "current_law_indexed",
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.7710451956342754,
+        "p10_return": -0.7545908711218962,
+        "p25_return": -0.5311661076826296,
+        "p50_return": -0.41214657218341644
+      },
+      {
+        "spending": 80000,
+        "allocation": "60-40",
+        "tax_regime": "none",
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.9135838655729879,
+        "p10_return": -0.8089506191306673,
+        "p25_return": -0.6572094925074936,
+        "p50_return": -0.3895480721237519
       },
       {
         "spending": 80000,
         "allocation": "60-40",
         "tax_regime": "current_law_indexed",
-        "ruin_path_count": 1,
-        "ruin_month_min": 117,
-        "ruin_month_median": 117.0,
-        "ruin_month_es5": 117.0,
-        "ruin_month_es10": 117.0,
-        "p5_return": -0.9182265072055178,
-        "p10_return": -0.8083126068888234,
-        "p25_return": -0.6810209410702148,
-        "p50_return": -0.39869048962244236
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.9142759446879496,
+        "p10_return": -0.8148845407736506,
+        "p25_return": -0.6786785562541223,
+        "p50_return": -0.39690530349437997
       },
       {
         "spending": 90000,
@@ -98,24 +98,24 @@
         "ruin_month_median": 116.0,
         "ruin_month_es5": 116.0,
         "ruin_month_es10": 116.0,
-        "p5_return": -0.9984110763138849,
-        "p10_return": -0.9325435674148868,
-        "p25_return": -0.6686995566381637,
-        "p50_return": -0.5492078424036115
+        "p5_return": -0.9929780827770872,
+        "p10_return": -0.9658792940634513,
+        "p25_return": -0.6933068888169929,
+        "p50_return": -0.5555532307301336
       },
       {
         "spending": 90000,
         "allocation": "60-40",
         "tax_regime": "current_law_indexed",
-        "ruin_path_count": 1,
+        "ruin_path_count": 2,
         "ruin_month_min": 116,
-        "ruin_month_median": 116.0,
+        "ruin_month_median": 117.5,
         "ruin_month_es5": 116.0,
         "ruin_month_es10": 116.0,
-        "p5_return": -0.9999453259384641,
-        "p10_return": -0.9340858553962657,
-        "p25_return": -0.6948932020498743,
-        "p50_return": -0.558763695613504
+        "p5_return": -1.0,
+        "p10_return": -0.9560430512034532,
+        "p25_return": -0.6760205716866735,
+        "p50_return": -0.56677772068504
       }
     ],
     "RawBlockBootstrapSimulator": [
@@ -128,10 +128,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.6101614253408996,
-        "p10_return": -0.576562606239715,
-        "p25_return": -0.39761032759700526,
-        "p50_return": -0.20918894639402802
+        "p5_return": -0.6089388972656293,
+        "p10_return": -0.5855867843196271,
+        "p25_return": -0.39760113976384465,
+        "p50_return": -0.20567899734056602
       },
       {
         "spending": 80000,
@@ -142,9 +142,9 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.6179502771834365,
-        "p10_return": -0.5806035754854054,
-        "p25_return": -0.4018713909012427,
+        "p5_return": -0.6161962654843084,
+        "p10_return": -0.5743555173274536,
+        "p25_return": -0.39335703978972114,
         "p50_return": -0.20986947606024542
       },
       {
@@ -156,10 +156,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7352727909629374,
-        "p10_return": -0.7170966999738869,
-        "p25_return": -0.5573147411123024,
-        "p50_return": -0.2897301641021043
+        "p5_return": -0.7325173487626722,
+        "p10_return": -0.7237913867121871,
+        "p25_return": -0.5548369353815656,
+        "p50_return": -0.2718550814590035
       },
       {
         "spending": 90000,
@@ -170,10 +170,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7541732934396267,
-        "p10_return": -0.7230202810986974,
-        "p25_return": -0.5678933357011403,
-        "p50_return": -0.29201768211320195
+        "p5_return": -0.7371142160167908,
+        "p10_return": -0.7161320810874388,
+        "p25_return": -0.566403113426472,
+        "p50_return": -0.29619408014036713
       },
       {
         "spending": 80000,
@@ -184,24 +184,24 @@
         "ruin_month_median": 117.0,
         "ruin_month_es5": 117.0,
         "ruin_month_es10": 117.0,
-        "p5_return": -0.8564711658350563,
-        "p10_return": -0.8238503114623331,
-        "p25_return": -0.30626512001101597,
-        "p50_return": 0.041859673671425957
+        "p5_return": -0.8466473219307071,
+        "p10_return": -0.8220892292981568,
+        "p25_return": -0.30540569328097217,
+        "p50_return": 0.048089523845221846
       },
       {
         "spending": 80000,
         "allocation": "60-40",
         "tax_regime": "current_law_indexed",
         "ruin_path_count": 1,
-        "ruin_month_min": 117,
-        "ruin_month_median": 117.0,
-        "ruin_month_es5": 117.0,
-        "ruin_month_es10": 117.0,
-        "p5_return": -0.8582907714732998,
-        "p10_return": -0.8260334328420242,
-        "p25_return": -0.3413029275559096,
-        "p50_return": 0.03442604969336139
+        "ruin_month_min": 119,
+        "ruin_month_median": 119.0,
+        "ruin_month_es5": 119.0,
+        "ruin_month_es10": 119.0,
+        "p5_return": -0.8484971186078278,
+        "p10_return": -0.8146697251356009,
+        "p25_return": -0.340600097705754,
+        "p50_return": 0.04265180608187878
       },
       {
         "spending": 90000,
@@ -212,10 +212,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8679713216230095,
-        "p10_return": -0.8494023122862618,
-        "p25_return": -0.472059041630469,
-        "p50_return": -0.24840940993757676
+        "p5_return": -0.8935576579603367,
+        "p10_return": -0.8724175616278785,
+        "p25_return": -0.4826222240130419,
+        "p50_return": -0.24766011368267687
       },
       {
         "spending": 90000,
@@ -226,10 +226,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8923379535794879,
-        "p10_return": -0.8520829076124421,
-        "p25_return": -0.471698641528897,
-        "p50_return": -0.25080811574455836
+        "p5_return": -0.8835262581317582,
+        "p10_return": -0.8721265156020092,
+        "p25_return": -0.48425120055898796,
+        "p50_return": -0.25574977469699145
       }
     ],
     "RegimeSwitchingBootstrapSimulator": [
@@ -242,10 +242,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.5128755008388648,
-        "p10_return": -0.4451231900899688,
-        "p25_return": -0.36777087020342347,
-        "p50_return": -0.20933579091425572
+        "p5_return": -0.5163077084592536,
+        "p10_return": -0.44551473800376185,
+        "p25_return": -0.3682973965797458,
+        "p50_return": -0.1894748627826996
       },
       {
         "spending": 80000,
@@ -256,38 +256,38 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.5105057116801355,
-        "p10_return": -0.4511032049940191,
-        "p25_return": -0.3813568821104084,
-        "p50_return": -0.2208723913028517
+        "p5_return": -0.49941880451118814,
+        "p10_return": -0.45869590405235533,
+        "p25_return": -0.38430887253998713,
+        "p50_return": -0.20740865248884627
       },
       {
         "spending": 90000,
         "allocation": "50-50",
         "tax_regime": "none",
         "ruin_path_count": 1,
-        "ruin_month_min": 116,
-        "ruin_month_median": 116.0,
-        "ruin_month_es5": 116.0,
-        "ruin_month_es10": 116.0,
-        "p5_return": -0.7977593840738941,
-        "p10_return": -0.7798617938812276,
-        "p25_return": -0.5501904064970558,
-        "p50_return": -0.21574960590319558
+        "ruin_month_min": 114,
+        "ruin_month_median": 114.0,
+        "ruin_month_es5": 114.0,
+        "ruin_month_es10": 114.0,
+        "p5_return": -0.7930774225373206,
+        "p10_return": -0.7705873428548216,
+        "p25_return": -0.5426860871356519,
+        "p50_return": -0.22715783641517306
       },
       {
         "spending": 90000,
         "allocation": "50-50",
         "tax_regime": "current_law_indexed",
         "ruin_path_count": 1,
-        "ruin_month_min": 115,
-        "ruin_month_median": 115.0,
-        "ruin_month_es5": 115.0,
-        "ruin_month_es10": 115.0,
-        "p5_return": -0.7924792916169062,
-        "p10_return": -0.7456113225590757,
-        "p25_return": -0.5458858429582134,
-        "p50_return": -0.24147172415117366
+        "ruin_month_min": 114,
+        "ruin_month_median": 114.0,
+        "ruin_month_es5": 114.0,
+        "ruin_month_es10": 114.0,
+        "p5_return": -0.8001731978454654,
+        "p10_return": -0.7700334335797396,
+        "p25_return": -0.5507890287818225,
+        "p50_return": -0.2494553300836171
       },
       {
         "spending": 80000,
@@ -298,10 +298,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8123563213875412,
-        "p10_return": -0.7954670020858535,
-        "p25_return": -0.5318708074216073,
-        "p50_return": -0.186989257811764
+        "p5_return": -0.8121074629964159,
+        "p10_return": -0.7963643085336901,
+        "p25_return": -0.5321968659930318,
+        "p50_return": -0.17894232674611382
       },
       {
         "spending": 80000,
@@ -312,38 +312,38 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8128140797035586,
-        "p10_return": -0.7970672860270015,
-        "p25_return": -0.5381097088002681,
-        "p50_return": -0.17608928484259245
+        "p5_return": -0.813294902826665,
+        "p10_return": -0.7997415688338877,
+        "p25_return": -0.5382810340844029,
+        "p50_return": -0.1868907250334091
       },
       {
         "spending": 90000,
         "allocation": "60-40",
         "tax_regime": "none",
-        "ruin_path_count": 1,
-        "ruin_month_min": 118,
-        "ruin_month_median": 118.0,
-        "ruin_month_es5": 118.0,
-        "ruin_month_es10": 118.0,
-        "p5_return": -0.7350689103046557,
-        "p10_return": -0.5995132815931159,
-        "p25_return": -0.40678663623497335,
-        "p50_return": -0.03730338196193974
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.7388529108917139,
+        "p10_return": -0.6015839743373,
+        "p25_return": -0.4237719948584481,
+        "p50_return": -0.05148485868399531
       },
       {
         "spending": 90000,
         "allocation": "60-40",
         "tax_regime": "current_law_indexed",
-        "ruin_path_count": 1,
-        "ruin_month_min": 118,
-        "ruin_month_median": 118.0,
-        "ruin_month_es5": 118.0,
-        "ruin_month_es10": 118.0,
-        "p5_return": -0.7110629378712194,
-        "p10_return": -0.608115844308542,
-        "p25_return": -0.4177488178303166,
-        "p50_return": -0.05322128187216457
+        "ruin_path_count": 0,
+        "ruin_month_min": null,
+        "ruin_month_median": null,
+        "ruin_month_es5": null,
+        "ruin_month_es10": null,
+        "p5_return": -0.725175798936072,
+        "p10_return": -0.6005807834233068,
+        "p25_return": -0.42325417888998884,
+        "p50_return": -0.05969171171782771
       }
     ],
     "RegimeSwitchingValuationVARSimulator": [
@@ -356,10 +356,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7426720062746837,
-        "p10_return": -0.7292383420847178,
-        "p25_return": -0.5914893827586469,
-        "p50_return": -0.4486001482757104
+        "p5_return": -0.7446244007921577,
+        "p10_return": -0.7324137074073221,
+        "p25_return": -0.5910963359294229,
+        "p50_return": -0.44333182826690876
       },
       {
         "spending": 80000,
@@ -370,10 +370,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7468149495576151,
-        "p10_return": -0.7321694882063542,
-        "p25_return": -0.6062631876108958,
-        "p50_return": -0.45290074518953566
+        "p5_return": -0.742509660654399,
+        "p10_return": -0.7324545474247313,
+        "p25_return": -0.6065039133909562,
+        "p50_return": -0.45837603136201927
       },
       {
         "spending": 90000,
@@ -384,10 +384,10 @@
         "ruin_month_median": 116.0,
         "ruin_month_es5": 116.0,
         "ruin_month_es10": 116.0,
-        "p5_return": -0.8342340560058634,
-        "p10_return": -0.8249596439720441,
-        "p25_return": -0.7882983569579578,
-        "p50_return": -0.6541399682338832
+        "p5_return": -0.8293064460684677,
+        "p10_return": -0.8116229027733067,
+        "p25_return": -0.7849706063845255,
+        "p50_return": -0.6425674425009595
       },
       {
         "spending": 90000,
@@ -398,10 +398,10 @@
         "ruin_month_median": 116.0,
         "ruin_month_es5": 116.0,
         "ruin_month_es10": 116.0,
-        "p5_return": -0.8481307455255253,
-        "p10_return": -0.8192330034532241,
-        "p25_return": -0.7966904635481131,
-        "p50_return": -0.6411756159004817
+        "p5_return": -0.8480731039306478,
+        "p10_return": -0.8192780556030576,
+        "p25_return": -0.7875006470200362,
+        "p50_return": -0.6375563495755057
       },
       {
         "spending": 80000,
@@ -412,10 +412,10 @@
         "ruin_month_median": 119.0,
         "ruin_month_es5": 119.0,
         "ruin_month_es10": 119.0,
-        "p5_return": -0.8079698675062601,
-        "p10_return": -0.6641788234826393,
-        "p25_return": -0.4798597946148045,
-        "p50_return": -0.21778615731324735
+        "p5_return": -0.8074567398519076,
+        "p10_return": -0.6796512745165055,
+        "p25_return": -0.4771033402083327,
+        "p50_return": -0.2223060792721201
       },
       {
         "spending": 80000,
@@ -426,24 +426,24 @@
         "ruin_month_median": 119.0,
         "ruin_month_es5": 119.0,
         "ruin_month_es10": 119.0,
-        "p5_return": -0.8087199410396358,
-        "p10_return": -0.680113750782587,
-        "p25_return": -0.4954503132395568,
-        "p50_return": -0.2085470049499601
+        "p5_return": -0.8090535945677693,
+        "p10_return": -0.6801234457048868,
+        "p25_return": -0.4727565888176861,
+        "p50_return": -0.241304822025667
       },
       {
         "spending": 90000,
         "allocation": "60-40",
         "tax_regime": "none",
         "ruin_path_count": 1,
-        "ruin_month_min": 113,
-        "ruin_month_median": 113.0,
-        "ruin_month_es5": 113.0,
-        "ruin_month_es10": 113.0,
-        "p5_return": -0.766408325652465,
-        "p10_return": -0.7415462271393465,
-        "p25_return": -0.6252834784071507,
-        "p50_return": -0.3799112199136325
+        "ruin_month_min": 114,
+        "ruin_month_median": 114.0,
+        "ruin_month_es5": 114.0,
+        "ruin_month_es10": 114.0,
+        "p5_return": -0.7942782005650827,
+        "p10_return": -0.7478990233168646,
+        "p25_return": -0.6179541160069858,
+        "p50_return": -0.3777852581744542
       },
       {
         "spending": 90000,
@@ -454,10 +454,10 @@
         "ruin_month_median": 113.0,
         "ruin_month_es5": 113.0,
         "ruin_month_es10": 113.0,
-        "p5_return": -0.7887095026952052,
-        "p10_return": -0.7452417520934865,
-        "p25_return": -0.6246235196944199,
-        "p50_return": -0.3740870231218057
+        "p5_return": -0.7828881652916607,
+        "p10_return": -0.7467107023825493,
+        "p25_return": -0.6304800679973904,
+        "p50_return": -0.37796855925060857
       }
     ],
     "VARResidualBootstrapSimulator": [
@@ -470,10 +470,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7444926437690376,
-        "p10_return": -0.7094889899608084,
-        "p25_return": -0.43241238994977277,
-        "p50_return": -0.157608568927812
+        "p5_return": -0.7536946836028953,
+        "p10_return": -0.7104853346676248,
+        "p25_return": -0.4241165428437436,
+        "p50_return": -0.1618535886121042
       },
       {
         "spending": 80000,
@@ -484,10 +484,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7340848426394833,
-        "p10_return": -0.717078593697467,
-        "p25_return": -0.4340049709062309,
-        "p50_return": -0.16027554909648523
+        "p5_return": -0.7534528167601213,
+        "p10_return": -0.7191011128286271,
+        "p25_return": -0.44312459341285637,
+        "p50_return": -0.16909357647961942
       },
       {
         "spending": 90000,
@@ -498,10 +498,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.6129682155888689,
-        "p10_return": -0.5954323512523283,
-        "p25_return": -0.3417323069373024,
-        "p50_return": -0.14766041535333457
+        "p5_return": -0.6102281035609481,
+        "p10_return": -0.5914431983204306,
+        "p25_return": -0.34535286305322255,
+        "p50_return": -0.14652738918602362
       },
       {
         "spending": 90000,
@@ -512,10 +512,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.6173218257420068,
-        "p10_return": -0.5911004701695776,
-        "p25_return": -0.3664997717759022,
-        "p50_return": -0.16965315329147546
+        "p5_return": -0.6215736862535868,
+        "p10_return": -0.6015875804421895,
+        "p25_return": -0.35454493749241417,
+        "p50_return": -0.16758053534461087
       },
       {
         "spending": 80000,
@@ -526,10 +526,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.568172890911569,
-        "p10_return": -0.4766050763076169,
-        "p25_return": -0.26882826235733304,
-        "p50_return": -0.061239171073183996
+        "p5_return": -0.6077110543971522,
+        "p10_return": -0.4736191979747352,
+        "p25_return": -0.27564412865070353,
+        "p50_return": -0.07701866764802522
       },
       {
         "spending": 80000,
@@ -540,10 +540,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.5689344949609914,
-        "p10_return": -0.46965521816760386,
-        "p25_return": -0.2716887734184017,
-        "p50_return": -0.08340938329298184
+        "p5_return": -0.6009381631551675,
+        "p10_return": -0.48539088322279306,
+        "p25_return": -0.26580241912014535,
+        "p50_return": -0.0832779914981858
       },
       {
         "spending": 90000,
@@ -554,10 +554,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.9090740247975104,
-        "p10_return": -0.8115822536882485,
-        "p25_return": -0.7511496339771597,
-        "p50_return": -0.478324733148321
+        "p5_return": -0.9361727949138113,
+        "p10_return": -0.8108823205632864,
+        "p25_return": -0.7442262278631147,
+        "p50_return": -0.4679500964943318
       },
       {
         "spending": 90000,
@@ -568,10 +568,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.910757690210637,
-        "p10_return": -0.84329141250078,
-        "p25_return": -0.7496947058648413,
-        "p50_return": -0.48336406138948285
+        "p5_return": -0.936865078584769,
+        "p10_return": -0.84591603057879,
+        "p25_return": -0.7479218059174396,
+        "p50_return": -0.4870139160066499
       }
     ],
     "ValuationAdjustedVARSimulator": [
@@ -584,10 +584,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7828011147177586,
-        "p10_return": -0.723906119630174,
-        "p25_return": -0.6905171017997084,
-        "p50_return": -0.18485744187580827
+        "p5_return": -0.7843880871959973,
+        "p10_return": -0.7245219300220678,
+        "p25_return": -0.6654889359841332,
+        "p50_return": -0.18709353990698518
       },
       {
         "spending": 80000,
@@ -598,10 +598,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.787504472330529,
-        "p10_return": -0.7365302554112979,
-        "p25_return": -0.6698731113423401,
-        "p50_return": -0.2033830973808628
+        "p5_return": -0.7949322060963313,
+        "p10_return": -0.739499730913882,
+        "p25_return": -0.6645979704279925,
+        "p50_return": -0.202981366042973
       },
       {
         "spending": 90000,
@@ -612,10 +612,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7669543282039953,
-        "p10_return": -0.7251903274909618,
-        "p25_return": -0.6797631371189987,
-        "p50_return": -0.49475079750611384
+        "p5_return": -0.7666568722067046,
+        "p10_return": -0.7302817561526338,
+        "p25_return": -0.6709563658023968,
+        "p50_return": -0.4844124204032972
       },
       {
         "spending": 90000,
@@ -626,10 +626,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7621560492370562,
-        "p10_return": -0.7335071145854893,
-        "p25_return": -0.6823724840339578,
-        "p50_return": -0.49866703833413156
+        "p5_return": -0.7635014295052533,
+        "p10_return": -0.7270970506733444,
+        "p25_return": -0.6799307892450873,
+        "p50_return": -0.4981967070279462
       },
       {
         "spending": 80000,
@@ -640,10 +640,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8130345427569258,
-        "p10_return": -0.8034049342367805,
-        "p25_return": -0.6335693398980407,
-        "p50_return": -0.2715107344796453
+        "p5_return": -0.8108880545618546,
+        "p10_return": -0.7997569813414276,
+        "p25_return": -0.6331751679309189,
+        "p50_return": -0.2726860522483001
       },
       {
         "spending": 80000,
@@ -654,10 +654,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.8139294444790414,
-        "p10_return": -0.8005030879565399,
-        "p25_return": -0.6432448294290196,
-        "p50_return": -0.27921677000386813
+        "p5_return": -0.8110824502066752,
+        "p10_return": -0.7853189999156348,
+        "p25_return": -0.6467233248432855,
+        "p50_return": -0.2857310255947224
       },
       {
         "spending": 90000,
@@ -668,10 +668,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7580401633601286,
-        "p10_return": -0.7348299515149378,
-        "p25_return": -0.5163120986723804,
-        "p50_return": -0.14290638017570692
+        "p5_return": -0.7646822636186151,
+        "p10_return": -0.7375820801791833,
+        "p25_return": -0.5124228636751942,
+        "p50_return": -0.13966876610825374
       },
       {
         "spending": 90000,
@@ -682,10 +682,10 @@
         "ruin_month_median": null,
         "ruin_month_es5": null,
         "ruin_month_es10": null,
-        "p5_return": -0.7428331146958601,
-        "p10_return": -0.7193283503767872,
-        "p25_return": -0.5069253196946618,
-        "p50_return": -0.14719164850048988
+        "p5_return": -0.7480245594795832,
+        "p10_return": -0.7387414799540774,
+        "p25_return": -0.5197814689289748,
+        "p50_return": -0.16420632210872219
       }
     ]
   }

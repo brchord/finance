@@ -34,11 +34,14 @@ Plan.md, "Structural simplifications available for a kernel"):
   both times; this port computes it once and reuses it. This is a
   numerically-exact deduplication, not a behavior change.
 
-Everything else -- including the known `expected_dividends` bug that uses
-month-0 `spy_price` instead of the current month's `day_spy` (see
-"Decisions reserved for the user" in the plan) -- is preserved exactly.
-Comments below reference the corresponding line numbers in
-linear_models.py so a diff against the reference is easy to audit.
+Everything else is preserved exactly. Comments below reference the
+corresponding line numbers in linear_models.py so a diff against the
+reference is easy to audit.
+
+(The `expected_dividends` calculation once used month-0 `spy_price`
+instead of the current month's `day_spy` -- a bug in the reference
+implementation, fixed there and here together; see git history for the
+fix commit.)
 """
 
 import math
@@ -365,14 +368,10 @@ def run_simulation_fast(
                         spy_position_size -= selling_position
                         cash += selling_position * day_spy
 
-        # Reserve Deficit Protection (linear_models.py:479-513). NOTE:
-        # expected_dividends intentionally uses spy_price (month-0 price),
-        # not day_spy -- a known bug preserved as-is, see module
-        # docstring and the GPU optimization plan's "Decisions reserved
-        # for the user".
+        # Reserve Deficit Protection (linear_models.py:479-513).
         div_events_expected = math.floor(
             req_liquidity / monthly_withdrawal / 3.0)
-        expected_dividends = (spy_position_size * spy_price * spy_div_yield
+        expected_dividends = (spy_position_size * day_spy * spy_div_yield
                               * (div_events_expected / 4.0))
         spending_needs = req_liquidity - expected_dividends
         current_runway = cash - spending_needs
