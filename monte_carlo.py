@@ -905,7 +905,7 @@ class MonteCarloCLI:
         self.agg_results = run_stats
 
 
-def parse_args(argv: Optional[List[str]] = None):
+def parse_args():
     "CLI argument parser"
     prog_description = """CLI tool that invokes MC simulation across all
     portfolio models using the Long Equity and Fixed Income Ladders strategy.
@@ -944,16 +944,16 @@ def parse_args(argv: Optional[List[str]] = None):
                         choices=["process", "numba"],
                         default="process",
                         dest="backend")
-    return parser.parse_args(argv)
+    return parser.parse_args()
 
 
-def main(argv: Optional[List[str]] = None):
+def main():
     "Main entrypoint"
     logging.basicConfig(
         format="%(asctime)s:%(filename)s:"
                "%(lineno)d:%(levelname)s: %(message)s",
         level=logging.INFO)
-    args = parse_args(argv)
+    args = parse_args()
     cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
     cli.run(backend=args.backend)
     with open(args.raw_output_filename, "w", encoding="utf-8") as f:

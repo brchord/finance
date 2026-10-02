@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -200,18 +201,25 @@ class TestChunkSizes:
 class TestCommandLine:
     REQUIRED = ["-c", "cfg.json", "-r", "raw.json", "-o", "agg.json"]
 
-    def test_backend_defaults_to_process(self):
-        assert mc.parse_args(self.REQUIRED).backend == "process"
+    @staticmethod
+    def set_command_line(monkeypatch, args):
+        monkeypatch.setattr(sys, "argv", ["monte_carlo.py", *args])
+
+    def test_backend_defaults_to_process(self, monkeypatch):
+        self.set_command_line(monkeypatch, self.REQUIRED)
+        assert mc.parse_args().backend == "process"
 
     @pytest.mark.parametrize("flag", ["-b", "--backend"])
     @pytest.mark.parametrize("backend", ["process", "numba"])
-    def test_backend_flag(self, flag, backend):
-        assert mc.parse_args(
-            self.REQUIRED + [flag, backend]).backend == backend
+    def test_backend_flag(self, flag, backend, monkeypatch):
+        self.set_command_line(monkeypatch, self.REQUIRED + [flag, backend])
+        assert mc.parse_args().backend == backend
 
-    def test_unknown_backend_rejected(self):
+    def test_unknown_backend_rejected(self, monkeypatch):
+        self.set_command_line(
+            monkeypatch, self.REQUIRED + ["--backend", "bogus"])
         with pytest.raises(SystemExit):
-            mc.parse_args(self.REQUIRED + ["--backend", "bogus"])
+            mc.parse_args()
 
     @pytest.mark.parametrize("backend", ["process", "numba"])
     def test_main_runs_requested_backend(
@@ -229,9 +237,11 @@ class TestCommandLine:
             {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}))
         raw_file, agg_file = tmp_path / "raw.json", tmp_path / "agg.json"
 
-        mc.main(["-c", str(config_file), "-r", str(raw_file),
-                 "-o", str(agg_file), "-m", str(market_cache),
-                 "--backend", backend])
+        self.set_command_line(monkeypatch, [
+            "-c", str(config_file), "-r", str(raw_file),
+            "-o", str(agg_file), "-m", str(market_cache),
+            "--backend", backend])
+        mc.main()
 
         assert calls == [backend]
         raw = json.loads(raw_file.read_text())
