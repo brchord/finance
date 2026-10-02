@@ -1,9 +1,13 @@
 """
 fast_regime_switching_path_simulation.py
 
-Numba port of RegimeSwitchingValuationVARSimulator.simulate_paths
-(market_modelling/path_simulation.py). Profiling showed its three steps
-split roughly 90% / 9% / 1% of total time:
+Numba ports of RegimeSwitchingValuationVARSimulator.simulate_paths and
+RegimeSwitchingBootstrapSimulator.simulate_paths
+(market_modelling/path_simulation.py). Their references are line for line
+identical through steps 1 and 2 below and differ only in step 3, so both
+ports share steps 1-2 (_regime_conditional_increments) and each has its
+own step-3 kernel. Profiling (on the Valuation model) showed the three
+steps split roughly 90% / 9% / 1% of total time:
 
 1. Regime path generation (per-step, vectorized-over-paths already, but
    sequential in time): minor cost, ported for completeness.
@@ -48,12 +52,13 @@ fixed design (`self.pool`/`self.block_size` keyed on {0, 1} throughout
 path_simulation.py).
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 from numba import njit, prange
 
-from market_modelling.path_simulation import RegimeSwitchingValuationVARSimulator
+from market_modelling.path_simulation import (
+    RegimeSwitchingBootstrapSimulator, RegimeSwitchingValuationVARSimulator)
 
 N_VARIABLES = 4
 
@@ -244,38 +249,74 @@ def _simulate_regime_recurrence_fast(
     return spx_paths, cpi_paths, yield_3m_paths, yield_5y_paths
 
 
-def simulate_regime_switching_paths_fast(
-    simulator: RegimeSwitchingValuationVARSimulator,
-    simulation_months: int = 360,
-    num_paths: int = 10000,
-    seed: Optional[int] = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+@njit(parallel=True, cache=True)
+def _simulate_regime_bootstrap_recurrence_fast(
+    increments,                 # (num_paths, months, 4)
+    initial_spx, initial_cpi, initial_3m, initial_5y,
+    phi_rate, target_yield_3m, target_yield_5y,
+    months,
+):
     """
-    Numba-accelerated equivalent of
-    RegimeSwitchingValuationVARSimulator.simulate_paths. Every RNG call
-    is made in the same order, with the same arguments (batched where
-    confirmed equivalent -- see module docstring), as the reference; only
-    the RNG-free bookkeeping and the array math move into Numba. See
-    tests/test_fast_regime_switching_path_simulation.py for the parity
-    tests pinning this to the reference.
+    Numba port of RegimeSwitchingBootstrapSimulator.simulate_paths's step
+    3 (path_simulation.py, lines ~1231-1261): the bootstrapped returns
+    compounded as-is, plus the structural yield anchor. No equilibrium
+    drift or CAPE drag, unlike _simulate_regime_recurrence_fast. Same
+    outer-prange-over-paths layout, for the same reason.
     """
-    if simulator.transition_matrix is None:
-        raise RuntimeError("Model is not fitted. Call fit() first.")
+    num_paths = increments.shape[0]
+    dt = 1.0 / 12.0
+
+    spx_paths = np.zeros((num_paths, months))
+    cpi_paths = np.zeros((num_paths, months))
+    yield_3m_paths = np.zeros((num_paths, months))
+    yield_5y_paths = np.zeros((num_paths, months))
+
+    for i in prange(num_paths):
+        curr_spx = initial_spx
+        curr_cpi = initial_cpi
+        curr_3m = initial_3m
+        curr_5y = initial_5y
+
+        for step in range(months):
+            spx_log_ret = increments[i, step, 0]
+            cpi_log_ret = increments[i, step, 1]
+            diff_3m = (increments[i, step, 2]
+                       - phi_rate * (curr_3m - target_yield_3m) * dt)
+            diff_5y = (increments[i, step, 3]
+                       - phi_rate * (curr_5y - target_yield_5y) * dt)
+
+            curr_spx *= np.exp(spx_log_ret)
+            curr_cpi *= np.exp(cpi_log_ret)
+            curr_3m = max(0.0, curr_3m + diff_3m)
+            curr_5y = max(0.0, curr_5y + diff_5y)
+
+            spx_paths[i, step] = curr_spx
+            cpi_paths[i, step] = curr_cpi
+            yield_3m_paths[i, step] = curr_3m
+            yield_5y_paths[i, step] = curr_5y
+
+    return spx_paths, cpi_paths, yield_3m_paths, yield_5y_paths
+
+
+def _regime_conditional_increments(
+    simulator: Union[RegimeSwitchingBootstrapSimulator,
+                     RegimeSwitchingValuationVARSimulator],
+    simulation_months: int,
+    num_paths: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Steps 1 and 2, shared by both regime-switching models: their reference
+    simulate_paths implementations are line for line identical up to
+    this point (regime path, then regime-conditional block bootstrap).
+    Uses `rng` exactly as the references do, in the same order, so each
+    caller's step 3 sees the same increments its reference would.
+    """
+    assert simulator.transition_matrix is not None
     assert simulator.stationary_dist is not None
-    assert simulator.historical_spx_mean is not None
-    assert simulator.expected_inflation is not None
-    assert simulator.initial_spx_level is not None
-    assert simulator.initial_cpi_level is not None
-    assert simulator.initial_yield_3m is not None
-    assert simulator.initial_yield_5y is not None
-    assert simulator.target_yield_3m is not None
-    assert simulator.target_yield_5y is not None
     assert 0 in simulator.pool and 1 in simulator.pool, (
         "fast_regime_switching_path_simulation hardcodes a 2-state "
         "regime model (0, 1), matching the reference's own design")
-
-    rng = np.random.default_rng(seed)
-    dt = 1.0 / 12.0
 
     # Step 1: identical RNG draws to the reference, same order.
     initial_regimes = rng.choice(
@@ -307,6 +348,39 @@ def simulate_regime_switching_paths_fast(
     increments = np.zeros((num_paths, simulation_months, N_VARIABLES))
     _scatter_blocks(
         increments, pool0, pool1, path_of, lo_of, take_of, regime_of, starts)
+    return increments
+
+
+def simulate_regime_switching_paths_fast(
+    simulator: RegimeSwitchingValuationVARSimulator,
+    simulation_months: int = 360,
+    num_paths: int = 10000,
+    seed: Optional[int] = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Numba-accelerated equivalent of
+    RegimeSwitchingValuationVARSimulator.simulate_paths. Every RNG call
+    is made in the same order, with the same arguments (batched where
+    confirmed equivalent -- see module docstring), as the reference; only
+    the RNG-free bookkeeping and the array math move into Numba. See
+    tests/test_fast_regime_switching_path_simulation.py for the parity
+    tests pinning this to the reference.
+    """
+    if simulator.transition_matrix is None:
+        raise RuntimeError("Model is not fitted. Call fit() first.")
+    assert simulator.historical_spx_mean is not None
+    assert simulator.expected_inflation is not None
+    assert simulator.initial_spx_level is not None
+    assert simulator.initial_cpi_level is not None
+    assert simulator.initial_yield_3m is not None
+    assert simulator.initial_yield_5y is not None
+    assert simulator.target_yield_3m is not None
+    assert simulator.target_yield_5y is not None
+
+    rng = np.random.default_rng(seed)
+    dt = 1.0 / 12.0
+    increments = _regime_conditional_increments(
+        simulator, simulation_months, num_paths, rng)
 
     # Step 3: equilibrium drift + CAPE valuation drag recurrence.
     equilibrium_equity_drift = (
@@ -320,5 +394,42 @@ def simulate_regime_switching_paths_fast(
         simulator.gamma_cape, equilibrium_equity_drift, simulator.phi_rate,
         simulator.target_yield_3m, simulator.target_yield_5y,
         simulator.historical_spx_mean,
+        simulation_months,
+    )
+
+
+def simulate_regime_switching_bootstrap_paths_fast(
+    simulator: RegimeSwitchingBootstrapSimulator,
+    simulation_months: int = 360,
+    num_paths: int = 10000,
+    seed: Optional[int] = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Numba-accelerated equivalent of
+    RegimeSwitchingBootstrapSimulator.simulate_paths: the same shared
+    steps 1-2 as simulate_regime_switching_paths_fast (same RNG calls,
+    same order), then this model's simpler step 3. See
+    tests/test_fast_regime_switching_path_simulation.py for the parity
+    tests pinning this to the reference.
+    """
+    if simulator.transition_matrix is None:
+        raise RuntimeError("Model is not fitted. Call fit() first.")
+    assert simulator.initial_spx_level is not None
+    assert simulator.initial_cpi_level is not None
+    assert simulator.initial_yield_3m is not None
+    assert simulator.initial_yield_5y is not None
+    assert simulator.target_yield_3m is not None
+    assert simulator.target_yield_5y is not None
+
+    rng = np.random.default_rng(seed)
+    increments = _regime_conditional_increments(
+        simulator, simulation_months, num_paths, rng)
+
+    return _simulate_regime_bootstrap_recurrence_fast(
+        increments,
+        simulator.initial_spx_level, simulator.initial_cpi_level,
+        simulator.initial_yield_3m, simulator.initial_yield_5y,
+        simulator.phi_rate, simulator.target_yield_3m,
+        simulator.target_yield_5y,
         simulation_months,
     )

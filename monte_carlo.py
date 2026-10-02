@@ -27,10 +27,11 @@ from market_data.yf_fred_market_data import MarketDataManager
 from market_modelling.fast_hybrid_path_simulation import (
     simulate_hybrid_paths_fast)
 from market_modelling.fast_regime_switching_path_simulation import (
+    simulate_regime_switching_bootstrap_paths_fast,
     simulate_regime_switching_paths_fast)
 from market_modelling.path_simulation import (
     HybridValuationVARSimulator, PathSimulator,
-    RegimeSwitchingValuationVARSimulator)
+    RegimeSwitchingBootstrapSimulator, RegimeSwitchingValuationVARSimulator)
 from tax_models.regimes import build_tax_regime
 
 logger = logging.getLogger(__name__)
@@ -46,18 +47,23 @@ def _generate_paths_fast(
     Dispatches to a Numba-accelerated path generator when one exists for
     path_simulator's type (market_modelling/fast_hybrid_path_simulation.py,
     fast_regime_switching_path_simulation.py), else falls back to the
-    reference PathSimulator.simulate_paths unchanged. Both fast paths are
-    pinned bit-identical to their reference by their own parity tests
+    reference PathSimulator.simulate_paths unchanged. Every fast path is
+    pinned bit-identical to its reference by its own parity tests
     (tests/test_fast_hybrid_path_simulation.py,
     tests/test_fast_regime_switching_path_simulation.py), so this dispatch
-    never changes results -- only which of the two supported models get
-    the faster path, for now.
+    never changes results -- only which models get the faster path. Three
+    of the six supported models have one; the other three
+    (RawBlockBootstrap, VARResidualBootstrap, ValuationAdjustedVAR) fall
+    back.
     """
     if isinstance(path_simulator, HybridValuationVARSimulator):
         return simulate_hybrid_paths_fast(
             path_simulator, simulation_months, num_paths, seed=seed)
     if isinstance(path_simulator, RegimeSwitchingValuationVARSimulator):
         return simulate_regime_switching_paths_fast(
+            path_simulator, simulation_months, num_paths, seed=seed)
+    if isinstance(path_simulator, RegimeSwitchingBootstrapSimulator):
+        return simulate_regime_switching_bootstrap_paths_fast(
             path_simulator, simulation_months, num_paths, seed=seed)
     return path_simulator.simulate_paths(
         simulation_months=simulation_months, num_paths=num_paths, seed=seed)
