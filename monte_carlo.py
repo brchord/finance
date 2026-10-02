@@ -47,14 +47,16 @@ def _generate_paths_fast(
     Dispatches to a Numba-accelerated path generator when one exists for
     path_simulator's type (market_modelling/fast_hybrid_path_simulation.py,
     fast_regime_switching_path_simulation.py), else falls back to the
-    reference PathSimulator.simulate_paths unchanged. Every fast path is
-    pinned bit-identical to its reference by its own parity tests
-    (tests/test_fast_hybrid_path_simulation.py,
-    tests/test_fast_regime_switching_path_simulation.py), so this dispatch
-    never changes results -- only which models get the faster path. Three
-    of the six supported models have one; the other three
-    (RawBlockBootstrap, VARResidualBootstrap, ValuationAdjustedVAR) fall
-    back.
+    reference PathSimulator.simulate_paths unchanged. Three of the six
+    supported models have one; the other three (RawBlockBootstrap,
+    VARResidualBootstrap, ValuationAdjustedVAR) fall back.
+
+    Both regime-switching generators are bit-identical to their
+    references (tests/test_fast_regime_switching_path_simulation.py
+    compares exactly). HybridValuationVARSimulator's is not: its reference
+    does each VAR step as a BLAS matrix multiply whose internal summation
+    order can't be reproduced per path, so its paths match only to
+    ~1e-10 relative (tests/test_fast_hybrid_path_simulation.py).
     """
     if isinstance(path_simulator, HybridValuationVARSimulator):
         return simulate_hybrid_paths_fast(
@@ -170,8 +172,9 @@ class MonteCarloEngine:
         Splits total_paths into per-worker chunk sizes. Shared by submit()
         (backend="process") and MonteCarloCLI._run_numba()'s path
         generation (backend="numba"), so both draw the identical sequence
-        of per-chunk seeds from a cell's seed and therefore simulate
-        bit-identical market paths for the same cell.
+        of per-chunk seeds from a cell's seed and therefore simulate the
+        same market paths for the same cell (bit-identical except for
+        HybridValuationVARSimulator; see _generate_paths_fast).
 
         chunk_size is clamped to at least 1: with fewer paths than workers,
         total_paths // n_workers is 0 and the loop below would never
@@ -508,11 +511,14 @@ class MonteCarloCLI:
                 (same cell_seed, so bit-identical results either way), not
                 a change to the statistical design. Uses the identical
                 chunk-size/seed sequence as "process" (see
-                MonteCarloEngine._chunk_sizes), so for the same config,
-                "numba" simulates bit-identical market paths to "process";
-                any remaining difference in Terminal NAV reduces to the
-                reference-vs-fast_ladder kernel difference already covered
-                by tests/test_fast_ladder.py (rel=1e-9).
+                MonteCarloEngine._chunk_sizes), and its fast operator and
+                regime-switching path generators are bit-identical to the
+                reference, so for the same config "numba" produces exactly
+                the same results as "process" -- except for
+                HybridValuationVARSimulator, whose fast path generator
+                matches only to ~1e-10 relative (see
+                _generate_paths_fast), which can flip a decision on rare
+                paths.
         """
         if backend == "process":
             return self._run_process_pool()
@@ -661,7 +667,9 @@ class MonteCarloCLI:
         Common random numbers: cell seeds and the per-chunk seed sequence
         are drawn identically to backend="process" (see
         MonteCarloEngine._chunk_sizes), so for the same config both
-        backends simulate bit-identical market paths for a given cell.
+        backends simulate the same market paths for a given cell
+        (bit-identical except for HybridValuationVARSimulator; see
+        _generate_paths_fast).
         """
         if self.raw_results is not None:
             raise RuntimeError(
@@ -929,9 +937,10 @@ def parse_args(argv: Optional[List[str]] = None):
                         help="Execution backend (see MonteCarloCLI.run): "
                              "'process' runs the original Python simulation "
                              "code; 'numba' runs the compiled fast path, "
-                             "which matches it to within floating-point "
-                             "tolerance and is much faster. Default: "
-                             "process",
+                             "which gives identical results (except for "
+                             "HybridValuationVARSimulator, which matches "
+                             "only to rounding) and is much faster. "
+                             "Default: process",
                         choices=["process", "numba"],
                         default="process",
                         dest="backend")

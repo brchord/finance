@@ -3,13 +3,21 @@ Parity tests for portfolio_models/fast_ladder.py against the reference
 LongSPYWithTreasuryLadders.run_simulation. A failure here must always mean
 a porting mistake in fast_ladder.py, never an intentional behavior change
 -- see doc/plans/GPU Optimization Plan.md, Stage 1.
+
+Comparisons are exact (assert_array_equal), not approximate: a last-digit
+difference in the operator can flip a share-count or rebalancing
+decision on rare paths, so "close" is not good enough. An earlier
+version passed these tests at rtol=1e-9 while differing in the last digit
+on nearly every path, and visibly on 9 of 600,000 paths of a real config.
 """
 import numpy as np
+import pandas as pd
 import pytest
 
 import market_modelling.path_simulation as ps
 from portfolio_models.fast_ladder import (
-    flatten_tax_regime, run_simulation_fast, run_simulation_fast_batch)
+    _pandas_rolling_mean, _python_sum, flatten_tax_regime,
+    run_simulation_fast, run_simulation_fast_batch)
 from portfolio_models.linear_models import LongSPYWithTreasuryLadders as LSTL
 from tax_models.regimes import build_tax_regime
 
@@ -79,8 +87,8 @@ class TestFastLadderParity:
                 assert fast_ruin == ref_ruin, (
                     f"ruin month mismatch path={i} regime={tax_regime_name} "
                     f"equity={equity}: ref={ref_ruin} fast={fast_ruin}")
-                np.testing.assert_allclose(
-                    fast_path, ref_path, rtol=1e-9, atol=1e-6,
+                np.testing.assert_array_equal(
+                    fast_path, ref_path,
                     err_msg=(f"nav path mismatch path={i} "
                              f"regime={tax_regime_name} equity={equity}"))
 
@@ -104,8 +112,47 @@ class TestFastLadderParity:
                 "current_law_indexed")
 
             assert fast_ruin == ref_ruin
-            assert fast_path[-1] == pytest.approx(ref_path[-1], rel=1e-9,
-                                                   abs=1e-6)
+            np.testing.assert_array_equal(fast_path, ref_path)
+
+
+class TestExactnessHelpers:
+    """The reference gets these from pandas and Python's sum(); if either
+    library changes its algorithm, these fail before the parity tests do,
+    naming the cause."""
+
+    @pytest.mark.parametrize("window", [2, 4, 9])
+    def test_rolling_mean_matches_pandas(self, window):
+        rng = np.random.default_rng(window)
+        series = [400 * np.exp(np.cumsum(rng.normal(0, 0.045, 756)))
+                  for _ in range(50)]
+        series += [rng.uniform(-1e6, 1e6, int(rng.integers(1, 40)))
+                   for _ in range(200)]
+        series += [np.repeat(rng.uniform(1, 1e4, 30), rng.integers(1, 12, 30))
+                   for _ in range(50)]
+        series += [np.array([5.0]), np.array([0.0, -0.0, 0.0])]
+        for x in series:
+            expected = pd.Series(x).rolling(
+                window=window, min_periods=1).mean().to_numpy()
+            np.testing.assert_array_equal(
+                _pandas_rolling_mean(x, window), expected)
+
+    def test_python_sum_matches_builtin_sum(self):
+        rng = np.random.default_rng(0)
+        for _ in range(5000):
+            n = int(rng.integers(0, 15))
+            values = rng.uniform(1e4, 1e7, n) * 10.0 ** rng.integers(-2, 3)
+            is_py_float = rng.random(n) < 0.5
+            items = [float(v) if py else np.float64(v)
+                     for v, py in zip(values, is_py_float)]
+            assert _python_sum(values, is_py_float, n) == sum(items)
+
+    def test_sum_switches_mode_at_first_numpy_float(self):
+        # Sanity check of the CPython behavior the port depends on:
+        # all-Python-float sums are compensated, so they differ from the
+        # same values summed after a numpy float64 ends compensation.
+        values = [0.1] * 10
+        assert sum(values) == 1.0
+        assert sum([np.float64(0.0)] + values) == 0.9999999999999999
 
 
 class TestFastLadderBatch:
@@ -127,7 +174,7 @@ class TestFastLadderBatch:
                 spx_paths[i], cpi_paths[i], tbill_paths[i], tnote_paths[i],
                 1_000_000.0, months, 0.6, 0.4, 60_000.0, 0.01, *flat)
             assert batch_ruins[i] == ruin_month
-            assert batch_navs[i] == pytest.approx(nav_path[-1])
+            assert batch_navs[i] == nav_path[-1]
 
 
 class TestFlattenTaxRegime:

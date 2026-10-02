@@ -38,8 +38,8 @@ class TestFastRegimeSwitchingPathSimulationParity:
 
         for name, r, f in zip(
                 ["spx", "cpi", "yield3m", "yield5y"], ref, fast):
-            np.testing.assert_allclose(
-                f, r, rtol=1e-9, atol=1e-9,
+            np.testing.assert_array_equal(
+                f, r,
                 err_msg=f"{name} mismatch at months={months} paths={paths} "
                         f"seed={seed}")
 
@@ -72,7 +72,7 @@ class TestFastRegimeSwitchingPathSimulationParity:
         ref = simulator.simulate_paths(48, 25, seed=3)
         fast = simulate_regime_switching_paths_fast(simulator, 48, 25, seed=3)
         for r, f in zip(ref, fast):
-            np.testing.assert_allclose(f, r, rtol=1e-9, atol=1e-9)
+            np.testing.assert_array_equal(f, r)
 
 
 @pytest.fixture
@@ -100,8 +100,8 @@ class TestFastRegimeSwitchingBootstrapPathSimulationParity:
 
         for name, r, f in zip(
                 ["spx", "cpi", "yield3m", "yield5y"], ref, fast):
-            np.testing.assert_allclose(
-                f, r, rtol=1e-9, atol=1e-9,
+            np.testing.assert_array_equal(
+                f, r,
                 err_msg=f"{name} mismatch at months={months} paths={paths} "
                         f"seed={seed}")
 
@@ -131,4 +131,4 @@ class TestFastRegimeSwitchingBootstrapPathSimulationParity:
         fast = simulate_regime_switching_bootstrap_paths_fast(
             simulator, 48, 25, seed=3)
         for r, f in zip(ref, fast):
-            np.testing.assert_allclose(f, r, rtol=1e-9, atol=1e-9)
+            np.testing.assert_array_equal(f, r)

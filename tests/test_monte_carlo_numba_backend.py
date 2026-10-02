@@ -3,11 +3,12 @@ Parity between MonteCarloCLI.run(backend="numba") and the default
 backend="process", per doc/plans/GPU Optimization Plan.md Stage 2.
 
 backend="numba" draws market paths with the identical chunk-size/seed
-sequence backend="process" uses (see MonteCarloEngine._chunk_sizes), so for
-the same config both backends simulate bit-identical market paths; any
-remaining difference in Terminal NAV/SPX reduces to the reference-vs-
-fast_ladder kernel difference already covered at rel=1e-9 by
-tests/test_fast_ladder.py.
+sequence backend="process" uses (see MonteCarloEngine._chunk_sizes), and
+its operator and regime-switching path generators are bit-identical to
+the reference, so results must match exactly. The one exception is
+HybridValuationVARSimulator, whose fast path generator matches only to
+rounding (see tests/test_fast_hybrid_path_simulation.py); it's compared
+with a tolerance.
 """
 import json
 
@@ -15,6 +16,27 @@ import numpy as np
 import pytest
 
 import monte_carlo as mc
+
+MATCHES_ONLY_TO_ROUNDING = {"HybridValuationVARSimulator"}
+
+
+def assert_backends_match(model_name, p_run, n_run):
+    where = (f"model={model_name} spending={p_run['spending']} "
+             f"equity={p_run['equity']} regime={p_run['tax_regime']}")
+    assert (p_run["spending"], p_run["equity"], p_run["tax_regime"]) == (
+        n_run["spending"], n_run["equity"], n_run["tax_regime"]), where
+    p_res, n_res = p_run["results"], n_run["results"]
+    if model_name in MATCHES_ONLY_TO_ROUNDING:
+        np.testing.assert_allclose(
+            n_res["Terminal SPX"], p_res["Terminal SPX"], rtol=1e-9,
+            err_msg=f"Terminal SPX mismatch: {where}")
+        np.testing.assert_allclose(
+            n_res["Terminal NAV"], p_res["Terminal NAV"], rtol=1e-6,
+            atol=1e-3, err_msg=f"Terminal NAV mismatch: {where}")
+    else:
+        assert n_res["Terminal SPX"] == p_res["Terminal SPX"], where
+        assert n_res["Terminal NAV"] == p_res["Terminal NAV"], where
+    assert n_run["ruin_histogram"] == p_run["ruin_histogram"], where
 
 SWEEP = dict(
     yearly_spending_floor=80_000, yearly_spending_ceil=90_000,
@@ -54,34 +76,7 @@ class TestNumbaBackendMatchesProcessBackend:
             assert len(p_runs) == len(n_runs)
 
             for p_run, n_run in zip(p_runs, n_runs):
-                assert p_run["spending"] == n_run["spending"]
-                assert p_run["equity"] == n_run["equity"]
-                assert p_run["tax_regime"] == n_run["tax_regime"]
-
-                p_spx = np.array(p_run["results"]["Terminal SPX"])
-                n_spx = np.array(n_run["results"]["Terminal SPX"])
-                np.testing.assert_allclose(
-                    n_spx, p_spx, rtol=1e-9,
-                    err_msg=(f"Terminal SPX mismatch: model={model_name} "
-                             f"spending={p_run['spending']} "
-                             f"equity={p_run['equity']} "
-                             f"regime={p_run['tax_regime']}"))
-
-                p_nav = np.array(p_run["results"]["Terminal NAV"])
-                n_nav = np.array(n_run["results"]["Terminal NAV"])
-                np.testing.assert_allclose(
-                    n_nav, p_nav, rtol=1e-6, atol=1e-3,
-                    err_msg=(f"Terminal NAV mismatch: model={model_name} "
-                             f"spending={p_run['spending']} "
-                             f"equity={p_run['equity']} "
-                             f"regime={p_run['tax_regime']}"))
-
-                np.testing.assert_array_equal(
-                    p_run["ruin_histogram"], n_run["ruin_histogram"],
-                    err_msg=(f"Ruin histogram mismatch: model={model_name} "
-                             f"spending={p_run['spending']} "
-                             f"equity={p_run['equity']} "
-                             f"regime={p_run['tax_regime']}"))
+                assert_backends_match(model_name, p_run, n_run)
 
     def test_rejects_unknown_backend(self, tmp_path, market_cache):
         config = {**SWEEP, "models": ALL_MODELS}
@@ -106,13 +101,7 @@ class TestNumbaBackendMatchesProcessBackend:
             n_runs = numba_cli.raw_results["simulations"][model_name]
             for p_run, n_run in zip(p_runs, n_runs, strict=True):
                 assert len(p_run["ruin_histogram"]) == 126
-                assert p_run["ruin_histogram"] == n_run["ruin_histogram"]
-                np.testing.assert_allclose(
-                    n_run["results"]["Terminal SPX"],
-                    p_run["results"]["Terminal SPX"], rtol=1e-9)
-                np.testing.assert_allclose(
-                    n_run["results"]["Terminal NAV"],
-                    p_run["results"]["Terminal NAV"], rtol=1e-6, atol=1e-3)
+                assert_backends_match(model_name, p_run, n_run)
 
     def test_fewer_paths_than_workers_matches_process_backend(
             self, tmp_path, market_cache, call_with_timeout):
@@ -131,10 +120,4 @@ class TestNumbaBackendMatchesProcessBackend:
             assert len(p_runs) == len(n_runs)
             for p_run, n_run in zip(p_runs, n_runs):
                 assert len(n_run["results"]["Terminal NAV"]) == 3
-                np.testing.assert_allclose(
-                    n_run["results"]["Terminal SPX"],
-                    p_run["results"]["Terminal SPX"], rtol=1e-9)
-                np.testing.assert_allclose(
-                    n_run["results"]["Terminal NAV"],
-                    p_run["results"]["Terminal NAV"], rtol=1e-6, atol=1e-3)
-                assert p_run["ruin_histogram"] == n_run["ruin_histogram"]
+                assert_backends_match(model_name, p_run, n_run)

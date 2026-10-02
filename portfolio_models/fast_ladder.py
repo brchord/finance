@@ -17,12 +17,10 @@ Plan.md, "Structural simplifications available for a kernel"):
   simulation and its holding period is simply `month >= 12`. We don't even
   need a running share count for the lot itself: `spy_position_size` (which
   the reference implementation already tracks) *is* the lot's share count.
-- The T-Note ladder becomes four fixed-size arrays (parallel: active,
-  maturity, amount, rate) instead of a dict. 64 slots is more than the
-  worst case (an initial 3 plus at most one new tranche per month, each
-  expiring within 60 months). Slot order is never observable: every
-  consumer of the ladder (sum, min, max) is order-independent, so reusing
-  a freed slot instead of preserving insertion order changes nothing.
+- The T-Note ladder becomes fixed-capacity arrays (maturity, amount,
+  rate) instead of a dict, kept in purchase order like the dict's
+  insertion order. 64 is more than the worst case (an initial 3 plus at
+  most one new tranche per month, each expiring within 60 months).
 - Tax law flattens to per-year bracket arrays, computed by *calling* the
   real TaxRegimeScenario.resolve() once per year at cpi_relative=1.0 (see
   `flatten_tax_regime`) rather than reimplementing each regime's logic.
@@ -37,6 +35,30 @@ Plan.md, "Structural simplifications available for a kernel"):
 Everything else is preserved exactly. Comments below reference the
 corresponding line numbers in linear_models.py so a diff against the
 reference is easy to audit.
+
+Bit-for-bit, not just "close": outputs must equal the reference's exactly
+(tests/test_fast_ladder.py compares with assert_array_equal). Rounding
+differences of one unit in the last place are not harmless here: the
+strategy branches on thresholds (share counts via ceil/floor, rebalancing
+and runway comparisons), so on rare paths a last-digit difference flips a
+decision and the path diverges by percent. An earlier version that was
+only "close" diverged visibly on 9 of 600,000 paths of a real config.
+Three things the reference does implicitly are therefore reproduced
+exactly:
+
+- Moving averages: the reference uses pandas' rolling mean, an online
+  Kahan-compensated algorithm whose results differ in the last digit from
+  a direct average of the same window. _pandas_rolling_mean is a port of
+  pandas' kernel, verified equal to pandas on ~10M values.
+- The T-note total: the reference uses Python's builtin sum(), which (on
+  Python >= 3.12) is compensated while every item is an exact float and
+  switches to plain addition at the first numpy float64. The three
+  starting notes hold Python floats; every note bought later holds a
+  numpy float64 (its amount derives from day_spy). _python_sum reproduces
+  this, with a per-note flag recording which kind each amount is.
+- Addition order: notes are kept in purchase order, and each month's
+  coupons are all added before any matured principal, as the reference's
+  two loops do. Floating-point addition isn't associative.
 
 (The `expected_dividends` calculation once used month-0 `spy_price`
 instead of the current month's `day_spy` -- a bug in the reference
@@ -56,6 +78,106 @@ N_ORDINARY_BRACKETS = 7
 N_LTCG_BRACKETS = 3
 T_NOTE_SLOTS = 64
 LONG_TERM_HOLDING_MONTHS = 12
+
+
+@njit(cache=True)
+def _pandas_rolling_mean(values, window):
+    """
+    pd.Series(values).rolling(window=window, min_periods=1).mean(), bit for
+    bit: a port of pandas' roll_mean kernel (Kahan-compensated running sum
+    with separate add/remove compensation, plus its sign and
+    repeated-value corrections). A direct average of each window differs
+    from pandas in the last digit on most values. Verified identical to
+    pandas 3.0.6 on ~10M values, including repeated values, mixed signs,
+    signed zeros and magnitudes from 1e-8 to 1e10.
+    """
+    n = values.shape[0]
+    out = np.empty(n)
+    nobs = 0
+    neg_ct = 0
+    sum_x = 0.0
+    comp_add = 0.0
+    comp_rem = 0.0
+    same_run = 0
+    prev_value = values[0] if n > 0 else 0.0
+    for i in range(n):
+        if i >= window:
+            val = values[i - window]
+            if val == val:
+                nobs -= 1
+                y = -val - comp_rem
+                t = sum_x + y
+                comp_rem = t - sum_x - y
+                sum_x = t
+                if math.copysign(1.0, val) < 0.0:
+                    neg_ct -= 1
+        val = values[i]
+        if val == val:
+            nobs += 1
+            y = val - comp_add
+            t = sum_x + y
+            comp_add = t - sum_x - y
+            sum_x = t
+            if math.copysign(1.0, val) < 0.0:
+                neg_ct += 1
+            if val == prev_value:
+                same_run += 1
+            else:
+                same_run = 1
+            prev_value = val
+        if nobs > 0:
+            result = sum_x / nobs
+            if same_run >= nobs:
+                result = prev_value
+            elif neg_ct == 0 and result < 0.0:
+                result = 0.0
+            elif neg_ct == nobs and result > 0.0:
+                result = 0.0
+            out[i] = result
+        else:
+            out[i] = np.nan
+    return out
+
+
+@njit(cache=True)
+def _cs_to_double(hi, lo):
+    if lo != 0.0 and math.isfinite(lo):
+        return hi + lo
+    return hi
+
+
+@njit(cache=True)
+def _python_sum(values, is_py_float, n):
+    """
+    Python's builtin sum() over values[:n], where is_py_float[i] says
+    whether that item would be an exact Python float (True) or a numpy
+    float64 (False) in the reference. CPython (>= 3.12) adds exact floats
+    with Neumaier compensation, but at the first item that isn't an exact
+    float it folds the compensation into the running total and continues
+    with plain addition for the rest. Verified identical to sum() on
+    100,000 mixed float/np.float64 lists.
+    """
+    hi = 0.0
+    lo = 0.0
+    compensated = True
+    acc = 0.0
+    for i in range(n):
+        x = values[i]
+        if compensated and is_py_float[i]:
+            t = hi + x
+            if abs(hi) >= abs(x):
+                lo += (hi - t) + x
+            else:
+                lo += (x - t) + hi
+            hi = t
+        elif compensated:
+            acc = _cs_to_double(hi, lo) + x
+            compensated = False
+        else:
+            acc = acc + x
+    if compensated:
+        return _cs_to_double(hi, lo)
+    return acc
 
 
 def flatten_tax_regime(
@@ -228,31 +350,34 @@ def run_simulation_fast(
 
     tnote_amount = initial_nav * ladder_allocation / 5.0
 
-    t_active = np.zeros(T_NOTE_SLOTS, dtype=np.bool_)
+    # The ladder in purchase order (the reference dict's insertion order);
+    # entries [0, n_notes) are live. t_py marks amounts that are exact
+    # Python floats in the reference -- the three starting notes, derived
+    # from initial_nav and the allocation (Python numbers from the config)
+    # -- as opposed to numpy float64s, which every later purchase is. See
+    # _python_sum.
     t_maturity = np.zeros(T_NOTE_SLOTS, dtype=np.int64)
     t_amount = np.zeros(T_NOTE_SLOTS)
     t_rate = np.zeros(T_NOTE_SLOTS)
+    t_py = np.zeros(T_NOTE_SLOTS, dtype=np.bool_)
+    t_expired = np.zeros(T_NOTE_SLOTS, dtype=np.bool_)
 
-    t_active[0], t_maturity[0], t_amount[0], t_rate[0] = (
-        True, 24, tnote_amount, yield5y[0])
-    t_active[1], t_maturity[1], t_amount[1], t_rate[1] = (
-        True, 36, tnote_amount * 2.0, yield5y[0])
-    t_active[2], t_maturity[2], t_amount[2], t_rate[2] = (
-        True, 60, tnote_amount, yield5y[0])
+    t_maturity[0], t_amount[0], t_rate[0], t_py[0] = (
+        24, tnote_amount, yield5y[0], True)
+    t_maturity[1], t_amount[1], t_rate[1], t_py[1] = (
+        36, tnote_amount * 2.0, yield5y[0], True)
+    t_maturity[2], t_amount[2], t_rate[2], t_py[2] = (
+        60, tnote_amount, yield5y[0], True)
+    n_notes = 3
 
     cash = (initial_nav - (tnote_amount * 4.0)
             - (spy_price * spy_position_size))
 
-    # Rolling means (min_periods=1 semantics) and the shifted CPI pct
-    # change (linear_models.py:296-305), with plain loops instead of
-    # pandas.
-    sma2 = np.empty(months)
-    sma4 = np.empty(months)
-    sma9 = np.empty(months)
-    for m in range(months):
-        sma2[m] = spx_prices[max(0, m - 1):m + 1].mean()
-        sma4[m] = spx_prices[max(0, m - 3):m + 1].mean()
-        sma9[m] = spx_prices[max(0, m - 8):m + 1].mean()
+    # Rolling means and the shifted CPI pct change
+    # (linear_models.py:296-305), reproducing pandas exactly.
+    sma2 = _pandas_rolling_mean(spx_prices, 2)
+    sma4 = _pandas_rolling_mean(spx_prices, 4)
+    sma9 = _pandas_rolling_mean(spx_prices, 9)
 
     cpi_pct = np.zeros(months)
     for m in range(months - 1):
@@ -305,26 +430,30 @@ def run_simulation_fast(
         ytd_ordinary_income += tbill_interest
 
         # Semi-annual T-Note coupons and maturities (linear_models.py:
-        # 404-435), merged into one pass over the ladder -- see module
-        # docstring: coupon and expiry checks use the same
-        # months_remaining value the reference computes before either
-        # mutation, so merging doesn't change results.
-        for idx in range(T_NOTE_SLOTS):
-            if not t_active[idx]:
-                continue
+        # 404-435): two passes in purchase order, like the reference --
+        # every coupon into cash first, then every matured principal.
+        # Interleaving them would change the order cash is summed in.
+        for idx in range(n_notes):
             months_remaining = t_maturity[idx] - m
             if months_remaining % 6 == 0 and m > 0:
                 coupon = t_amount[idx] * (t_rate[idx] / 2.0)
                 cash += coupon
                 ytd_ordinary_income += coupon
-            if months_remaining <= 0:
-                cash += t_amount[idx]
-                t_active[idx] = False
+            t_expired[idx] = months_remaining <= 0
 
-        tnote_position = 0.0
-        for idx in range(T_NOTE_SLOTS):
-            if t_active[idx]:
-                tnote_position += t_amount[idx]
+        kept = 0
+        for idx in range(n_notes):
+            if t_expired[idx]:
+                cash += t_amount[idx]
+            else:
+                t_maturity[kept] = t_maturity[idx]
+                t_amount[kept] = t_amount[idx]
+                t_rate[kept] = t_rate[idx]
+                t_py[kept] = t_py[idx]
+                kept += 1
+        n_notes = kept
+
+        tnote_position = _python_sum(t_amount, t_py, n_notes)
 
         current_nav = cash + spy_position_size * day_spy + tnote_position
         fixed_income_position = cash + tnote_position
@@ -334,9 +463,8 @@ def run_simulation_fast(
         # 449-450 and 481-482); computed once here and reused (see module
         # docstring).
         min_maturity = -1
-        for idx in range(T_NOTE_SLOTS):
-            if t_active[idx] and (min_maturity == -1
-                                   or t_maturity[idx] < min_maturity):
+        for idx in range(n_notes):
+            if min_maturity == -1 or t_maturity[idx] < min_maturity:
                 min_maturity = t_maturity[idx]
         if min_maturity == -1:
             req_liquidity = monthly_withdrawal * 12.0
@@ -395,14 +523,11 @@ def run_simulation_fast(
         # never recomputes them until after this block, so neither do we.
         if cash >= (2.0 * current_nav * ladder_allocation / 5.0):
             tnote_maturity = 24
-            max_maturity = -1
-            any_active = False
-            for idx in range(T_NOTE_SLOTS):
-                if t_active[idx]:
-                    any_active = True
+            if n_notes > 0:
+                max_maturity = t_maturity[0]
+                for idx in range(1, n_notes):
                     if t_maturity[idx] > max_maturity:
                         max_maturity = t_maturity[idx]
-            if any_active:
                 furthest_maturity = max_maturity - m
                 for target_m in (24, 36, 60):
                     if furthest_maturity < target_m:
@@ -412,19 +537,15 @@ def run_simulation_fast(
             tnote_tranche = current_nav * ladder_allocation / 5.0
             if (cash >= (tnote_tranche + spending_needs)
                     and tnote_tranche > 0.0):
-                slot = -1
-                for idx in range(T_NOTE_SLOTS):
-                    if not t_active[idx]:
-                        slot = idx
-                        break
-                if slot == -1:
+                if n_notes == T_NOTE_SLOTS:
                     raise RuntimeError(
                         "fast_ladder: T-Note ladder exceeded its fixed "
-                        "64-slot capacity")
-                t_active[slot] = True
-                t_maturity[slot] = m + tnote_maturity
-                t_amount[slot] = tnote_tranche
-                t_rate[slot] = yield5y[m]
+                        "64-note capacity")
+                t_maturity[n_notes] = m + tnote_maturity
+                t_amount[n_notes] = tnote_tranche
+                t_rate[n_notes] = yield5y[m]
+                t_py[n_notes] = False  # derives from day_spy: np.float64
+                n_notes += 1
                 cash -= tnote_tranche
 
         # Discount current reported inflation (linear_models.py:547).
@@ -443,10 +564,7 @@ def run_simulation_fast(
             ytd_ordinary_income = 0.0
             ytd_preferential_income = 0.0
 
-        tnote_position = 0.0
-        for idx in range(T_NOTE_SLOTS):
-            if t_active[idx]:
-                tnote_position += t_amount[idx]
+        tnote_position = _python_sum(t_amount, t_py, n_notes)
         current_nav = cash + spy_position_size * day_spy + tnote_position
 
         if current_nav <= 0.0:

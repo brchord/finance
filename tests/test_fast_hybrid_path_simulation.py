@@ -3,6 +3,16 @@ Parity tests for market_modelling/fast_hybrid_path_simulation.py against
 the reference HybridValuationVARSimulator.simulate_paths. A failure here
 must always mean a porting mistake, never an intentional behavior change
 -- see doc/plans/GPU Optimization Plan.md.
+
+Unlike the other fast ports, this one is NOT bit-identical, so these
+tests use a tolerance. The reference computes each VAR step as one BLAS
+matrix multiply over all paths, and BLAS chooses its own summation order
+(and fused multiply-adds) internally, which a per-path loop can't
+reproduce. Differences start in the last digit and compound to ~1e-10
+relative over 756 months (measured on real market data). Downstream, a
+last-digit difference can occasionally flip a portfolio decision on a
+path, so backend="numba" and backend="process" may differ on rare paths
+for this model only.
 """
 import numpy as np
 import pytest
@@ -27,7 +37,7 @@ class TestFastHybridPathSimulationParity:
         (756, 20, 42),   # the large-run horizon
         (13, 7, 0),      # not a multiple of the block size
     ])
-    def test_matches_reference_bit_for_bit(self, fitted, months, paths, seed):
+    def test_matches_reference_to_rounding(self, fitted, months, paths, seed):
         ref = fitted.simulate_paths(months, paths, seed=seed)
         fast = simulate_hybrid_paths_fast(fitted, months, paths, seed=seed)
 
