@@ -891,7 +891,7 @@ class MonteCarloCLI:
         self.agg_results = run_stats
 
 
-def parse_args():
+def parse_args(argv: Optional[List[str]] = None):
     "CLI argument parser"
     prog_description = """CLI tool that invokes MC simulation across all
     portfolio models using the Long Equity and Fixed Income Ladders strategy.
@@ -919,18 +919,28 @@ def parse_args():
                              "cache file",
                         default="market_data.parquet",
                         dest="market_data_filename")
-    return parser.parse_args()
+    parser.add_argument("-b", "--backend",
+                        help="Execution backend (see MonteCarloCLI.run): "
+                             "'process' runs the original Python simulation "
+                             "code; 'numba' runs the compiled fast path, "
+                             "which matches it to within floating-point "
+                             "tolerance and is much faster. Default: "
+                             "process",
+                        choices=["process", "numba"],
+                        default="process",
+                        dest="backend")
+    return parser.parse_args(argv)
 
 
-def main():
+def main(argv: Optional[List[str]] = None):
     "Main entrypoint"
     logging.basicConfig(
         format="%(asctime)s:%(filename)s:"
                "%(lineno)d:%(levelname)s: %(message)s",
         level=logging.INFO)
-    args = parse_args()
+    args = parse_args(argv)
     cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
-    cli.run()
+    cli.run(backend=args.backend)
     with open(args.raw_output_filename, "w", encoding="utf-8") as f:
         json.dump(cli.raw_results, f, indent=4)
 

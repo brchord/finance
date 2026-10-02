@@ -197,6 +197,50 @@ class TestChunkSizes:
         assert all(c > 0 for c in chunks)
 
 
+class TestCommandLine:
+    REQUIRED = ["-c", "cfg.json", "-r", "raw.json", "-o", "agg.json"]
+
+    def test_backend_defaults_to_process(self):
+        assert mc.parse_args(self.REQUIRED).backend == "process"
+
+    @pytest.mark.parametrize("flag", ["-b", "--backend"])
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_backend_flag(self, flag, backend):
+        assert mc.parse_args(
+            self.REQUIRED + [flag, backend]).backend == backend
+
+    def test_unknown_backend_rejected(self):
+        with pytest.raises(SystemExit):
+            mc.parse_args(self.REQUIRED + ["--backend", "bogus"])
+
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_main_runs_requested_backend(
+            self, backend, tmp_path, market_cache, monkeypatch):
+        calls = []
+        original_run = mc.MonteCarloCLI.run
+
+        def spy(self, *, backend="process"):
+            calls.append(backend)
+            return original_run(self, backend=backend)
+
+        monkeypatch.setattr(mc.MonteCarloCLI, "run", spy)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}))
+        raw_file, agg_file = tmp_path / "raw.json", tmp_path / "agg.json"
+
+        mc.main(["-c", str(config_file), "-r", str(raw_file),
+                 "-o", str(agg_file), "-m", str(market_cache),
+                 "--backend", backend])
+
+        assert calls == [backend]
+        raw = json.loads(raw_file.read_text())
+        assert list(raw["simulations"]) == [ALL_MODELS[0]]
+        assert all(len(sim["results"]["Terminal NAV"]) == 4
+                   for sim in raw["simulations"][ALL_MODELS[0]])
+        assert ALL_MODELS[0] in json.loads(agg_file.read_text())["results"]
+
+
 class TestAggregate:
     @staticmethod
     def build(tmp_path, market_cache, histogram, navs):
