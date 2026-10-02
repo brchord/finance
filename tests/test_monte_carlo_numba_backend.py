@@ -37,6 +37,15 @@ def assert_backends_match(model_name, p_run, n_run):
         assert n_res["Terminal SPX"] == p_res["Terminal SPX"], where
         assert n_res["Terminal NAV"] == p_res["Terminal NAV"], where
     assert n_run["ruin_histogram"] == p_run["ruin_histogram"], where
+    p_bands, n_bands = p_run["nav_bands"], n_run["nav_bands"]
+    assert n_bands.keys() == p_bands.keys(), where
+    for key in p_bands:
+        if model_name in MATCHES_ONLY_TO_ROUNDING:
+            np.testing.assert_allclose(
+                n_bands[key], p_bands[key], rtol=1e-6, atol=1e-3,
+                err_msg=f"nav_bands[{key}] mismatch: {where}")
+        else:
+            assert n_bands[key] == p_bands[key], f"{key}: {where}"
 
 SWEEP = dict(
     yearly_spending_floor=80_000, yearly_spending_ceil=90_000,

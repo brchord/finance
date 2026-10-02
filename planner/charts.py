@@ -22,6 +22,9 @@ class Theme:
     ramp: Sequence[str]      # ordinal, low -> high equity
     muted: str
     grid: str
+    # Fan chart fills, outer (P5-P10) to inner (P25-P50), and median line.
+    bands: Sequence[str] = ()
+    band_line: str = ""
 
 
 LIGHT = Theme(
@@ -29,13 +32,15 @@ LIGHT = Theme(
     # Blue steps 250 -> 700: the light end keeps >= 2:1 on a white surface.
     ramp=("#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6",
           "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"),
-    muted="#52514e", grid="#e5e4e0")
+    muted="#52514e", grid="#e5e4e0",
+    bands=("#cde2fb", "#9ec5f4", "#6da7ec"), band_line="#184f95")
 DARK = Theme(
     series_1="#3987e5", series_2="#d95926",
     # Blue steps 600 -> 150: the dark end keeps >= 2:1 on a dark surface.
     ramp=("#184f95", "#1c5cab", "#256abf", "#2a78d6", "#3987e5",
           "#5598e7", "#6da7ec", "#86b6ef", "#9ec5f4", "#b7d3f6"),
-    muted="#c3c2b7", grid="#383835")
+    muted="#c3c2b7", grid="#383835",
+    bands=("#0d366b", "#184f95", "#256abf"), band_line="#9ec5f4")
 
 
 def theme_for(dark: bool) -> Theme:
@@ -169,4 +174,43 @@ def spending_timeline(dates: Sequence[str], values: Sequence[Optional[float]],
     fig.update_xaxes(title_text="Review date")
     fig.update_yaxes(title_text="Max sustainable spending", tickprefix="$",
                      tickformat=",.0f")
+    return fig
+
+
+def fan_chart(bands: dict, retirement_age: float, initial_nav: float,
+              theme: Theme, log_scale: bool = False) -> go.Figure:
+    """
+    Per-year NAV percentile bands (MonteCarloCLI aggregated "nav_bands"):
+    nested P5-P10, P10-P25 and P25-P50 fills and the median line.
+    """
+    ages = [retirement_age + y for y in bands["years"]]
+    fig = go.Figure()
+    layers = [("p5", "p10", "P5–P10"), ("p10", "p25", "P10–P25"),
+              ("p25", "p50", "P25–P50")]
+    for (low, high, name), fill in zip(layers, theme.bands):
+        fig.add_trace(go.Scatter(
+            x=ages, y=bands[low], mode="lines", line=dict(width=0),
+            showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(
+            x=ages, y=bands[high], mode="lines", line=dict(width=0),
+            fill="tonexty", fillcolor=fill, name=name, hoverinfo="skip"))
+    for key, label in (("p5", "P5"), ("p10", "P10"), ("p25", "P25")):
+        # Invisible traces so the unified hover lists every percentile.
+        fig.add_trace(go.Scatter(
+            x=ages, y=bands[key], mode="lines", line=dict(width=0),
+            showlegend=False, name=label, hovertemplate="$%{y:,.0f}"))
+    fig.add_trace(go.Scatter(
+        x=ages, y=bands["p50"], mode="lines", name="Median",
+        line=dict(color=theme.band_line, width=2),
+        hovertemplate="$%{y:,.0f}"))
+    _base_layout(fig, theme)
+    fig.add_hline(y=initial_nav, line=dict(color=theme.muted, width=1),
+                  annotation_text="starting NAV",
+                  annotation_position="bottom right",
+                  annotation_font_color=theme.muted)
+    fig.update_xaxes(title_text="Age")
+    fig.update_yaxes(title_text="NAV (real $)", tickprefix="$",
+                     tickformat="~s", type="log" if log_scale else "linear",
+                     # Linear starts at $0 so the distance to ruin shows.
+                     rangemode="normal" if log_scale else "tozero")
     return fig

@@ -55,8 +55,8 @@ def run_page(monkeypatch, root, page=None):
     return at
 
 
-@pytest.mark.parametrize("page", [None, "pages/cell.py",
-                                  "pages/history.py"])
+@pytest.mark.parametrize("page", [None, "views/cell.py",
+                                  "views/history.py"])
 def test_pages_render_without_reviews(monkeypatch, tmp_path, page):
     at = run_page(monkeypatch, tmp_path, page)
     assert at.info  # each page points the user at creating a review
@@ -83,13 +83,16 @@ def test_explorer_ceiling_changes_headline(monkeypatch, reviews_with_run):
 
 
 def test_cell_page(monkeypatch, reviews_with_run):
-    at = run_page(monkeypatch, reviews_with_run, "pages/cell.py")
+    at = run_page(monkeypatch, reviews_with_run, "views/cell.py")
     labels = [m.label for m in at.metric]
     # Decision and reference model KPI rows.
     assert labels.count("P(ruin)") == 2
     assert "ES10 ruin age" in labels
+    # Survival, fan chart (decision + reference tabs) and histogram.
+    assert "NAV percentiles by age" in [h.value for h in at.subheader]
+    assert len(at.tabs) == 2
 
 
 def test_history_page(monkeypatch, reviews_with_run):
-    at = run_page(monkeypatch, reviews_with_run, "pages/history.py")
+    at = run_page(monkeypatch, reviews_with_run, "views/history.py")
     assert len(at.dataframe) == 2  # timeline table and review diff

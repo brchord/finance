@@ -160,15 +160,19 @@ reviews/                          # gitignored
   `years_to_simulate`, tax regime. The UI enforces this; runs with a
   different profile belong in a different review.
 - A **run** is one CLI invocation (one sweep). Its folder is keyed by a hash
-  of the canonicalized `config.json`.
-- The UI always sets `master_seed` (random per run, recorded) so every run
-  is reproducible and the hash is meaningful.
+  of the canonicalized `config.json`, excluding `master_seed`, so re-running
+  the same sweep finds the existing run. (`workers` is included: chunking,
+  and so every chunk's seed, depends on it.)
+- The UI always sets `master_seed` (random per run, recorded in
+  `config.json` and `meta.json`) so every run is reproducible.
 - **Cells merge across runs within a review.** A cell's key is
   `(model, spending, equity, tax_regime)`. If several runs computed the same
   cell, the one with the most paths wins (ties: the newest). The explorer
   always shows the merged view, so the frontier fills in as you refine.
-- **Dedup:** if a run folder with the same hash already has `results.json`,
-  reuse it; if it is running, show its progress instead of relaunching.
+- **Dedup:** if a run folder with the same hash already succeeded, reuse
+  it; if it is running, show its progress instead of relaunching. A failed
+  or cancelled run of the same sweep is replaced (with a new seed).
+- Reviews live in `reviews/` (gitignored), or in `$PLANNER_REVIEWS_DIR`.
 
 ### Job handling
 
@@ -181,8 +185,11 @@ Runs are much shorter now, so job tracking is deliberately light:
 - **Progress:** progress bar from `status.json`, polled with
   `st.fragment(run_every=2)` while a run is active. Shown inline on the
   explorer page; there is no separate monitor page.
-- **Cancel:** kill the process group by PID.
+- **Cancel:** kill the process group by PID (SIGTERM) and mark the run
+  `cancelled`.
 - **Stale detection:** `state == "running"` but the PID is gone → failed.
+  A run with `config.json` but no `status.json` is "starting" for 60 s,
+  then failed.
 
 `status.json`:
 
@@ -198,11 +205,15 @@ Runs are much shorter now, so job tracking is deliberately light:
 }
 ```
 
-`state` is one of `running`, `succeeded`, `failed` (with `error`).
+`state` is one of `running`, `succeeded`, `failed` (with `error`), or
+`cancelled` (written by the UI). `cells_done`/`cells_total` count
+portfolios, i.e. aggregated result entries.
 
 ## Required CLI / engine changes
 
-1. **`--job-dir <dir>`:** reads `<dir>/config.json`; writes `status.json`,
+All implemented (`job_files.py` holds the shared file protocol).
+
+1. **`-j/--job-dir <dir>`:** reads `<dir>/config.json`; writes `status.json`,
    `results.json` and `meta.json` into the folder. With `--job-dir`, the
    `-c/-r/-o` flags are not required. The raw output is skipped unless
    `-r` is given. Without `--job-dir`, behaviour is unchanged. All parsing
@@ -214,11 +225,14 @@ Runs are much shorter now, so job tracking is deliberately light:
 4. **Ruin histogram in aggregated results:** already present in the raw
    output; copy it into each aggregated cell entry. It enables the survival
    curve.
-5. **Per-year percentile bands (later):** keep an annual NAV snapshot per
-   path in both backends (the Numba kernel in `portfolio_models/fast_ladder.py`
-   and the process backend), compute per-year P5/P10/P25/P50 in the reduce
-   step, and store only those arrays. This is the only invasive engine
-   change, and it must keep the backends' bit-identical guarantees.
+5. **Per-year percentile bands:** both backends keep each path's NAV at
+   every year-end (`fast_ladder.annual_snapshot_months`) and reduce them to
+   per-year P5/P10/P25/P50 as each cell is collected
+   (`monte_carlo.nav_bands`), so only those arrays reach the raw and
+   aggregated output. No kernel change was needed: the batch wrappers
+   already had every path's monthly NAV. The bands match exactly across
+   backends (to rounding for HybridValuationVARSimulator), and the 50k-path
+   runtime is unchanged.
 
 ## Results data contract (`results.json`)
 
@@ -231,7 +245,9 @@ Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
   `ruin_month_es5`, `ruin_month_es10` (existing)
 - `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
 - `ruin_histogram`: monthly counts over the horizon (new)
-- later: `bands: {ages: [], p5: [], p10: [], p25: [], p50: []}`
+- `nav_bands: {years: [0, 1, ...], p5: [], p10: [], p25: [], p50: []}`:
+  real NAV per year since retirement, year 0 = initial NAV, ruined paths
+  counted as 0 (new; `null` for results produced before it existed)
 
 Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 `P(solvent at month m) = 1 - cumsum(ruin_histogram)[m] / total_paths`.
@@ -286,7 +302,8 @@ For a selected (spending, allocation):
 - Survival curves: decision and reference on the same axes, the ceiling
   marked.
 - Ruin-age histogram.
-- Fan chart (after the per-year bands exist).
+- Fan chart: per-year P5–P10, P10–P25, P25–P50 bands and the median,
+  decision and reference model in tabs, optional log scale.
 
 ### 3. History
 
@@ -299,7 +316,13 @@ For a selected (spending, allocation):
 
 ## Streamlit implementation notes
 
-- Multi-page layout: `app.py` plus a `pages/` directory.
+- Multi-page layout: `app.py` with `st.navigation`, pages in `views/`. Not
+  `pages/`: Streamlit's legacy auto-discovery of a `pages/` folder hijacks a
+  first request straight to a page URL before `st.navigation` is registered.
+- `.streamlit/config.toml` binds the server to localhost: no auth, so it
+  must not listen on the network.
+- Markdown text (captions, labels, buttons) must escape `$` (`ui.esc`,
+  `ui.md_money`), or Streamlit renders `$...$` as LaTeX.
 - Results are cached on disk in the run folders; use `st.cache_data` only
   for loading/parsing JSON, keyed on path + mtime.
 - Keep the selected review, cell and controls in `st.session_state`.
@@ -310,6 +333,8 @@ For a selected (spending, allocation):
   in the subprocess.
 
 ## Implementation order
+
+All seven steps are implemented (October 2026).
 
 1. **CLI:** `--job-dir`, `status.json`, atomic writes, `meta.json`,
    `ruin_histogram` and numeric `equity` in aggregated cells.
@@ -323,8 +348,8 @@ For a selected (spending, allocation):
 6. **Per-year bands** in both backends, then the fan chart.
 7. **History page.**
 
-## For `CLAUDE.md`
+## Measured
 
-Add a pointer to this file plus the core rule: *the UI launches the CLI as
-a detached subprocess and only reads its output files; it never runs
-simulation code in the Streamlit process.*
+On the user's machine with `--backend numba`, 50,000 paths × 12 cells
+(`owning.json`) take ~7 s end to end, so a wide sweep of ~100 cells is
+about a minute.

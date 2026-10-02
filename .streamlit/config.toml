@@ -1,0 +1,7 @@
+# Local, single-user tool with no authentication: only listen on this
+# machine, never on the network.
+[server]
+address = "localhost"
+
+[browser]
+gatherUsageStats = false

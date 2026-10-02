@@ -74,6 +74,24 @@ def _generate_paths_fast(
         simulation_months=simulation_months, num_paths=num_paths, seed=seed)
 
 
+NAV_BAND_PERCENTILES = (5, 10, 25, 50)
+
+
+def nav_bands(annual_navs: np.ndarray) -> dict:
+    """
+    Per-year NAV percentiles across paths, from annual_navs of shape
+    (num_paths, years + 1) (see fast_ladder.annual_snapshot_months):
+    {"years": [0, 1, ...], "p5": [...], "p10": [...], ...}, year 0 being
+    the initial NAV. Ruined paths count with a NAV of 0. Only the median
+    and below are kept (doc/plans/UI Design.md, "Downside first").
+    """
+    q = np.percentile(annual_navs, NAV_BAND_PERCENTILES, axis=0)
+    bands: dict = {"years": list(range(annual_navs.shape[1]))}
+    for p, values in zip(NAV_BAND_PERCENTILES, q):
+        bands[f"p{p}"] = values.tolist()
+    return bands
+
+
 class MonteCarloEngine:
     """
     Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy
@@ -119,7 +137,7 @@ class MonteCarloEngine:
         initial_nav: float,
         num_paths: int,
         seed: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Static worker method executing a batch of paths inside an isolated
         process.
@@ -133,10 +151,16 @@ class MonteCarloEngine:
             3. ruin_histogram (np.ndarray): For ruin paths, the histogram of
                                             the month where ruin occurred
                                             (num_paths).
+            4. annual_navs (np.ndarray): NAV at the start and at each
+               year-end (num_paths, years + 1); see
+               fast_ladder.annual_snapshot_months.
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
         ruin_histogram = np.zeros(simulation_months)
+        snapshot_months = fast_ladder.annual_snapshot_months(
+            simulation_months)
+        annual_navs = np.empty((num_paths, snapshot_months.shape[0] + 1))
 
         # Generate batch real wealth index paths via simulator interface
         paths = path_simulator.simulate_paths(
@@ -163,11 +187,13 @@ class MonteCarloEngine:
 
             final_spx[i] = spx_paths[i, -1]
             final_navs[i] = nav_paths[-1]
+            annual_navs[i, 0] = initial_nav
+            annual_navs[i, 1:] = np.asarray(nav_paths)[snapshot_months]
             if nav_paths[-1] == 0.0:
                 ruin_month = np.argmax(nav_paths == 0.0)
                 ruin_histogram[ruin_month] += 1
 
-        return final_spx, final_navs, ruin_histogram
+        return final_spx, final_navs, ruin_histogram, annual_navs
 
     @staticmethod
     def _chunk_sizes(total_paths: int, n_workers: int) -> List[int]:
@@ -204,7 +230,7 @@ class MonteCarloEngine:
         num_paths: int,
         seed: int,
         portfolio_params: List[Tuple[float, float, float, float, tuple]],
-    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]:
+    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray, np.ndarray]]]:
         """
         Worker for backend="numba" (MonteCarloCLI._run_numba): generates
         one chunk of a CELL's market paths once, inside this worker
@@ -217,7 +243,8 @@ class MonteCarloEngine:
         _execute_strategy_batch: paths are generated once per cell instead
         of once per tax-regime variant, and the (potentially ~GB-scale)
         path arrays never leave this process -- only the much smaller
-        final_navs/ruin_months arrays are pickled back to the parent.
+        final_navs/ruin_months/annual_navs arrays are pickled back to the
+        parent.
 
         Runs single-threaded (numba.set_num_threads(1)): this function
         itself is already run in parallel by a ProcessPoolExecutor across
@@ -234,10 +261,9 @@ class MonteCarloEngine:
 
         per_portfolio = []
         for equity, ladder, spending, div, flat in portfolio_params:
-            final_navs, ruin_months = fast_ladder.run_simulation_fast_batch(
+            per_portfolio.append(fast_ladder.run_simulation_fast_batch(
                 spx, cpi, tbill, tnote, initial_nav, simulation_months,
-                equity, ladder, spending, div, *flat)
-            per_portfolio.append((final_navs, ruin_months))
+                equity, ladder, spending, div, *flat))
 
         return final_spx, per_portfolio
 
@@ -273,17 +299,18 @@ class MonteCarloEngine:
     def collect(
         self,
         futures: List[Future],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Blocks until the futures returned by submit() are done and assembles
         their results.
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
         """
         all_final_spx = []
         all_final_navs = []
+        all_annual_navs = []
         full_ruin_histogram = np.zeros(self.simulation_months)
 
         # Iterate futures in their original submission order rather than
@@ -292,15 +319,17 @@ class MonteCarloEngine:
         # silently permuted which array position each simulated path landed
         # in from run to run.
         for future in futures:
-            f_spx, f_navs, f_ruin_histograms = future.result()
+            f_spx, f_navs, f_ruin_histograms, f_annual = future.result()
             all_final_spx.append(f_spx)
             all_final_navs.append(f_navs)
+            all_annual_navs.append(f_annual)
             full_ruin_histogram += f_ruin_histograms
 
         return (
             np.concatenate(all_final_spx),
             np.concatenate(all_final_navs),
-            full_ruin_histogram
+            full_ruin_histogram,
+            np.concatenate(all_annual_navs),
         )
 
     def run(
@@ -308,7 +337,7 @@ class MonteCarloEngine:
         *,
         total_paths: int,
         n_workers: int
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Convenience wrapper: runs this engine alone on its own process pool.
 
@@ -321,7 +350,7 @@ class MonteCarloEngine:
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
         """
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = self.submit(
@@ -624,7 +653,7 @@ class MonteCarloCLI:
                 # Time spent blocked waiting on this portfolio's results;
                 # simulation itself overlaps with other portfolios' setup.
                 sim_start = time.perf_counter()
-                spx, nav, ruin_histogram = mc.collect(futures)
+                spx, nav, ruin_histogram, annual_navs = mc.collect(futures)
                 sim_end = time.perf_counter()
 
                 perf_counters[model_name]["simulation"].append(
@@ -641,6 +670,7 @@ class MonteCarloCLI:
                     "ladder": p["ladder_allocation"],
                     "tax_regime": p["tax_regime"],
                     "ruin_histogram": ruin_histogram.tolist(),
+                    "nav_bands": nav_bands(annual_navs),
                     "results": run_output
                 })
                 data_end = time.perf_counter()
@@ -812,6 +842,8 @@ class MonteCarloCLI:
                         [chunk[1][idx][0] for chunk in chunk_results])
                     ruin_months = np.concatenate(
                         [chunk[1][idx][1] for chunk in chunk_results])
+                    annual_navs = np.concatenate(
+                        [chunk[1][idx][2] for chunk in chunk_results])
                     ruin_histogram = np.zeros(simulation_months)
                     ruined = ruin_months[ruin_months >= 0]
                     if ruined.size > 0:
@@ -826,6 +858,7 @@ class MonteCarloCLI:
                         "ladder": p["ladder_allocation"],
                         "tax_regime": p["tax_regime"],
                         "ruin_histogram": ruin_histogram.tolist(),
+                        "nav_bands": nav_bands(annual_navs),
                         "results": {
                             "Terminal SPX": final_spx.tolist(),
                             "Terminal NAV": final_navs.tolist(),
@@ -927,6 +960,9 @@ class MonteCarloCLI:
                 # 1 - cumsum(ruin_histogram)[m] / total_paths.
                 entry["ruin_histogram"] = [
                     int(v) for v in sim["ruin_histogram"]]
+                # Per-year NAV percentiles (see nav_bands()); None for raw
+                # results produced before they existed.
+                entry["nav_bands"] = sim.get("nav_bands")
                 run_stats["results"][m].append(entry)
         self.agg_results = run_stats
 

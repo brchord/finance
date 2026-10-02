@@ -594,11 +594,15 @@ def run_simulation_fast_batch(
     """
     Parallel batch wrapper over run_simulation_fast: `*_paths` are 2-D
     (num_paths, months) arrays, as returned by PathSimulator.simulate_paths.
-    Returns (final_navs, ruin_months), one entry per path.
+    Returns (final_navs, ruin_months, annual_navs): one entry per path,
+    and annual_navs[i, y] is path i's NAV at the end of year y
+    (annual_navs[i, 0] is initial_nav; see annual_snapshot_months).
     """
     num_paths = spx_paths.shape[0]
     final_navs = np.empty(num_paths)
     ruin_months = np.empty(num_paths, dtype=np.int64)
+    snapshot_months = annual_snapshot_months(months)
+    annual_navs = np.empty((num_paths, snapshot_months.shape[0] + 1))
 
     for i in prange(num_paths):
         nav_path, ruin_month = run_simulation_fast(
@@ -612,5 +616,18 @@ def run_simulation_fast_batch(
         )
         final_navs[i] = nav_path[-1]
         ruin_months[i] = ruin_month
+        annual_navs[i, 0] = initial_nav
+        for y in range(snapshot_months.shape[0]):
+            annual_navs[i, y + 1] = nav_path[snapshot_months[y]]
 
-    return final_navs, ruin_months
+    return final_navs, ruin_months, annual_navs
+
+
+@njit(cache=True)
+def annual_snapshot_months(months):
+    """
+    Month indices of each year-end within a simulation of `months` months:
+    nav_path[m] is the NAV at the end of month m, so year y (1-based) ends
+    at index 12 * y - 1. A trailing partial year has no snapshot.
+    """
+    return np.arange(1, months // 12 + 1) * 12 - 1

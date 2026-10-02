@@ -341,7 +341,7 @@ if chosen is not None:
     if st.button(f"Open {chosen.allocation} at {ui.md_money(chosen.spending)} "
                  "in Cell detail"):
         st.session_state["cell"] = (chosen.spending, chosen.equity)
-        st.switch_page("pages/cell.py")
+        st.switch_page("views/cell.py")
 else:
     st.caption("Select a row to open it in Cell detail.")
 

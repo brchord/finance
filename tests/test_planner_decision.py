@@ -52,6 +52,16 @@ def test_cells_from_results_reads_cli_output():
     assert c.total_paths == results["total_paths"]
     assert sum(c.ruin_histogram) == c.ruin_count
     assert (c.run_id, c.finished_at) == ("x", "t")
+    assert c.nav_bands == first["nav_bands"]
+    assert c.nav_bands["years"][0] == 0
+
+
+def test_cells_without_nav_bands():
+    results = json.loads(GOLDEN.read_text())
+    for entries in results["results"].values():
+        for e in entries:
+            del e["nav_bands"]
+    assert all(c.nav_bands is None for c in d.cells_from_results(results))
 
 
 class TestMerge:

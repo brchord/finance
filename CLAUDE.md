@@ -2,7 +2,7 @@
 
 - Engine: `monte_carlo.py` (CLI), `market_modelling/`, `portfolio_models/`,
   `tax_models/`. Tests: `python -m pytest -q`; types: `python -m mypy .`.
-- UI: Streamlit (`streamlit run app.py`, pages in `pages/`, logic in
+- UI: Streamlit (`streamlit run app.py`, pages in `views/`, logic in
   `planner/`). Design and decisions: `doc/plans/UI Design.md`.
 
 **Core rule:** the UI launches the CLI as a detached subprocess

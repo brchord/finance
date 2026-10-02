@@ -84,6 +84,31 @@ if ref is not None:
 st.plotly_chart(charts.survival_curves(curves, ret_age, crit.ruin_ceiling,
                                        theme), theme="streamlit")
 
+st.subheader("NAV percentiles by age")
+fan_models = [(decision.DECISION_MODEL, cell)]
+if ref is not None:
+    fan_models.append((f"{ref_model} (reference)", ref))
+if cell.nav_bands is None:
+    st.write("This cell's run predates per-year NAV percentiles; re-run "
+             "the sweep to see them.")
+else:
+    log_scale = st.toggle(
+        "Log scale", value=False,
+        help="Shows the downside bands in more detail. Years where a "
+             "percentile is $0 (ruined) drop off the chart.")
+    tabs = st.tabs([name for name, _ in fan_models])
+    for tab, (name, c) in zip(tabs, fan_models):
+        with tab:
+            if c.nav_bands is None:
+                st.write("Not available for this run.")
+                continue
+            st.plotly_chart(charts.fan_chart(
+                c.nav_bands, ret_age, review.profile.initial_nav, theme,
+                log_scale), theme="streamlit")
+    st.caption("Real (inflation-adjusted) NAV. Only the median and below "
+               "are shown: upside is captured by recalibrating at the next "
+               "review.")
+
 st.subheader("Age at ruin")
 if cell.ruin_count == 0:
     st.write("No path is ruined within the horizon.")

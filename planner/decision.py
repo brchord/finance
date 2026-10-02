@@ -41,6 +41,10 @@ class Cell:
     p25_return: float
     p50_return: float
     ruin_histogram: Tuple[int, ...] = field(repr=False)
+    # Per-year NAV percentiles ({"years", "p5", "p10", "p25", "p50"}), or
+    # None for results produced before the CLI wrote them.
+    nav_bands: Optional[dict] = field(default=None, repr=False,
+                                      compare=False, hash=False)
     run_id: str = ""
     finished_at: str = ""
 
@@ -98,6 +102,7 @@ def cells_from_results(results: dict, run_id: str = "",
              p25_return=e["p25_return"],
              p50_return=e["p50_return"],
              ruin_histogram=tuple(e["ruin_histogram"]),
+             nav_bands=e.get("nav_bands"),
              run_id=run_id,
              finished_at=finished_at)
         for model, entries in results["results"].items()

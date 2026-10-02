@@ -117,6 +117,21 @@ class TestRun:
                 assert len(sim["ruin_histogram"]) == 120
                 assert sum(sim["ruin_histogram"]) <= 20
 
+    def test_nav_bands(self, cli):
+        for sims in cli.raw_results["simulations"].values():
+            for sim in sims:
+                bands = sim["nav_bands"]
+                assert bands["years"] == list(range(11))  # 10 years + start
+                for key in ("p5", "p10", "p25", "p50"):
+                    assert len(bands[key]) == 11
+                    assert bands[key][0] == 1_000_000
+                for y in bands["years"]:
+                    assert (bands["p5"][y] <= bands["p10"][y]
+                            <= bands["p25"][y] <= bands["p50"][y])
+                # The final year's percentiles are those of terminal NAV.
+                navs = sim["results"]["Terminal NAV"]
+                assert bands["p50"][-1] == pytest.approx(np.median(navs))
+
     def test_ruin_histogram_matches_zero_navs(self, cli):
         for sims in cli.raw_results["simulations"].values():
             for sim in sims:
@@ -383,6 +398,10 @@ class TestAggregate:
         assert entry["p25_return"] == pytest.approx(-0.5)
         assert entry["p10_return"] == pytest.approx(-0.8)
         assert entry["p5_return"] == pytest.approx(-0.9)
+
+    def test_nav_bands_default_to_none(self, tmp_path, market_cache):
+        entry = self.build(tmp_path, market_cache, [0.0] * 12, [1.0] * 4)
+        assert entry["nav_bands"] is None
 
     def test_aggregate_only_once(self, cli):
         with pytest.raises(RuntimeError, match="only be run once"):

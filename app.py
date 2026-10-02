@@ -15,9 +15,9 @@ from planner import ui
 st.set_page_config(page_title="Retirement planner", layout="wide")
 
 pages = st.navigation([
-    st.Page("pages/explorer.py", title="Explorer", default=True),
-    st.Page("pages/cell.py", title="Cell detail"),
-    st.Page("pages/history.py", title="History"),
+    st.Page("views/explorer.py", title="Explorer", default=True),
+    st.Page("views/cell.py", title="Cell detail"),
+    st.Page("views/history.py", title="History"),
 ])
 ui.sidebar()
 pages.run()
