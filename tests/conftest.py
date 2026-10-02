@@ -1,4 +1,5 @@
 import multiprocessing
+import threading
 
 import numpy as np
 import pandas as pd
@@ -46,3 +47,30 @@ def aligned_market(market_cache):
     from market_data.yf_fred_market_data import MarketDataManager
     return MarketDataManager(
         cache_filepath=str(market_cache)).get_aligned_real_returns()
+
+
+@pytest.fixture
+def call_with_timeout():
+    """
+    Runs fn() on a daemon thread and returns its result, failing the test
+    instead of hanging the whole suite if it doesn't finish within
+    `seconds`. For regression tests of code that used to loop forever.
+    """
+    def call(fn, seconds=60.0):
+        outcome = {}
+
+        def target():
+            try:
+                outcome["value"] = fn()
+            except BaseException as exc:  # re-raised in the test thread
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(seconds)
+        if thread.is_alive():
+            pytest.fail(f"did not finish within {seconds}s (hang?)")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+    return call

@@ -136,6 +136,47 @@ class TestRun:
         with pytest.raises(ValueError, match="not supported"):
             run_cli(tmp_path, market_cache, models=["NoSuchModel"])
 
+    def test_fewer_paths_than_workers_completes(
+            self, tmp_path, market_cache, call_with_timeout):
+        # Used to hang forever: 3 // 4 == 0 paths per chunk.
+        cli = call_with_timeout(
+            lambda: run_cli(tmp_path, market_cache, total_paths=3, workers=4))
+        for sims in cli.raw_results["simulations"].values():
+            for sim in sims:
+                assert len(sim["results"]["Terminal NAV"]) == 3
+                assert len(sim["results"]["Terminal SPX"]) == 3
+                assert len(sim["ruin_histogram"]) == 120
+
+
+class TestChunkSizes:
+    def test_fewer_paths_than_workers_terminates(self, call_with_timeout):
+        chunks = call_with_timeout(
+            lambda: mc.MonteCarloEngine._chunk_sizes(3, 4), seconds=5)
+        assert chunks == [1, 1, 1]
+
+    @pytest.mark.parametrize("total_paths,n_workers,expected", [
+        (20, 2, [10, 10]),
+        (37, 4, [9, 9, 9, 9, 1]),
+        (50_000, 20, [2_500] * 20),
+        (4, 4, [1, 1, 1, 1]),
+    ])
+    def test_unchanged_when_paths_cover_workers(
+            self, total_paths, n_workers, expected):
+        # Chunk sizes decide each chunk's seed, so any change here would
+        # silently change results (and the golden snapshot).
+        assert mc.MonteCarloEngine._chunk_sizes(
+            total_paths, n_workers) == expected
+
+    @pytest.mark.parametrize("total_paths", range(1, 30))
+    @pytest.mark.parametrize("n_workers", [1, 2, 3, 7, 20])
+    def test_chunks_cover_every_path(
+            self, total_paths, n_workers, call_with_timeout):
+        chunks = call_with_timeout(
+            lambda: mc.MonteCarloEngine._chunk_sizes(total_paths, n_workers),
+            seconds=5)
+        assert sum(chunks) == total_paths
+        assert all(c > 0 for c in chunks)
+
 
 class TestAggregate:
     @staticmethod

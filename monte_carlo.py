@@ -167,11 +167,14 @@ class MonteCarloEngine:
         of per-chunk seeds from a cell's seed and therefore simulate
         bit-identical market paths for the same cell.
 
-        NOTE: reproduces the known chunk_size == 0 infinite loop when
-        total_paths < n_workers -- see doc/plans/GPU Optimization Plan.md,
-        "Decisions reserved for the user". Not fixed here.
+        chunk_size is clamped to at least 1: with fewer paths than workers,
+        total_paths // n_workers is 0 and the loop below would never
+        finish. The clamp only changes anything in that case (one path
+        per chunk, fewer chunks than workers); whenever total_paths >=
+        n_workers the chunks, and so every chunk seed and result, are the
+        same as before.
         """
-        chunk_size = total_paths // n_workers
+        chunk_size = max(1, total_paths // n_workers)
         chunks = []
 
         remaining_paths = total_paths

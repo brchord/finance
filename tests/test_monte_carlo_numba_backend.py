@@ -90,3 +90,28 @@ class TestNumbaBackendMatchesProcessBackend:
         cli = mc.MonteCarloCLI(str(config_file), str(market_cache))
         with pytest.raises(ValueError, match="Unknown backend"):
             cli.run(backend="bogus")
+
+    def test_fewer_paths_than_workers_matches_process_backend(
+            self, tmp_path, market_cache, call_with_timeout):
+        # 3 paths over 4 workers used to hang both backends; now it runs as
+        # three 1-path chunks, which also exercises the fast kernels at
+        # num_paths == 1.
+        process_cli, numba_cli = call_with_timeout(lambda: (
+            run_cli(tmp_path, market_cache, "process_small", "process",
+                    total_paths=3, workers=4),
+            run_cli(tmp_path, market_cache, "numba_small", "numba",
+                    total_paths=3, workers=4)))
+
+        for model_name, p_runs in process_cli.raw_results[
+                "simulations"].items():
+            n_runs = numba_cli.raw_results["simulations"][model_name]
+            assert len(p_runs) == len(n_runs)
+            for p_run, n_run in zip(p_runs, n_runs):
+                assert len(n_run["results"]["Terminal NAV"]) == 3
+                np.testing.assert_allclose(
+                    n_run["results"]["Terminal SPX"],
+                    p_run["results"]["Terminal SPX"], rtol=1e-9)
+                np.testing.assert_allclose(
+                    n_run["results"]["Terminal NAV"],
+                    p_run["results"]["Terminal NAV"], rtol=1e-6, atol=1e-3)
+                assert p_run["ruin_histogram"] == n_run["ruin_histogram"]
