@@ -57,6 +57,25 @@ class TestMCConfig:
         assert cfg.tax_regimes == ["none"]
         assert cfg.total_portfolios() == 18
 
+    @pytest.mark.parametrize("years,months", [
+        (10, 120), (10.0, 120), (10.5, 126), (63, 756),
+        (35.3, 424),  # 423.6 months rounds up, not truncated to 423
+    ])
+    def test_simulation_months_is_rounded_int(self, years, months):
+        cfg = self.make(years_to_simulate=years)
+        assert cfg.simulation_months == months
+        assert type(cfg.simulation_months) is int
+        assert cfg.years == years  # reported value is left as given
+
+    def test_warns_only_when_years_are_not_whole_months(self, caplog):
+        with caplog.at_level("WARNING"):
+            self.make(years_to_simulate=10.5)
+            self.make(years_to_simulate=10.0)
+        assert not caplog.records
+        with caplog.at_level("WARNING"):
+            self.make(years_to_simulate=35.3)
+        assert "not a whole number" in caplog.text
+
     def test_allocations_sum_to_one_and_are_rounded(self):
         for p in self.make().portfolio_configs():
             assert p["equity_allocation"] + p["ladder_allocation"] == 1.0

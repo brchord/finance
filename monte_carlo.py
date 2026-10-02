@@ -377,6 +377,18 @@ class MonteCarloCLI:
             self.spend_increment = spend_increments
             self.initial_nav = initial_nav
             self.years = years_to_simulate
+            # The one place years become months; both backends read
+            # simulation_months rather than converting on their own. A JSON
+            # config yields a float for "10.0" or "10.5", and the process
+            # backend used to pass years * 12 straight through as an array
+            # size, which numpy rejects (np.zeros(120.0) -> TypeError).
+            months = years_to_simulate * 12
+            self.simulation_months = round(months)
+            if abs(months - self.simulation_months) > 1e-6:
+                logging.warning(
+                    "years_to_simulate=%s is %s months, not a whole number; "
+                    "simulating %d months.",
+                    years_to_simulate, months, self.simulation_months)
             self.retirement_age = retirement_age
             self.total_paths = total_paths
             self.n_workers = n_workers
@@ -572,7 +584,8 @@ class MonteCarloCLI:
                     cell_seed = int(rng.integers(1 << 32))
 
                 strategy = lm.LongSPYWithTreasuryLadders.from_json_object(p)
-                mc = MonteCarloEngine(strategy, simulator, config.years * 12,
+                mc = MonteCarloEngine(strategy, simulator,
+                                      config.simulation_months,
                                       config.initial_nav, cell_seed)
                 futures = mc.submit(executor, total_paths=config.total_paths,
                                     n_workers=config.n_workers)
@@ -650,7 +663,7 @@ class MonteCarloCLI:
 
         self._load_config()
         config = self.simulation_config
-        simulation_months = int(config.years * 12)
+        simulation_months = config.simulation_months
 
         results = {
             "initial_nav": config.initial_nav,

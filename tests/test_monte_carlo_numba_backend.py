@@ -91,6 +91,29 @@ class TestNumbaBackendMatchesProcessBackend:
         with pytest.raises(ValueError, match="Unknown backend"):
             cli.run(backend="bogus")
 
+    def test_fractional_years_match_across_backends(
+            self, tmp_path, market_cache):
+        # years_to_simulate=10.5 arrives from JSON as a float; it used to
+        # crash backend="process" (np.zeros(126.0)) while backend="numba"
+        # converted on its own. Both now read MCConfig.simulation_months.
+        process_cli = run_cli(tmp_path, market_cache, "process_frac",
+                              "process", years_to_simulate=10.5)
+        numba_cli = run_cli(tmp_path, market_cache, "numba_frac", "numba",
+                            years_to_simulate=10.5)
+
+        for model_name, p_runs in process_cli.raw_results[
+                "simulations"].items():
+            n_runs = numba_cli.raw_results["simulations"][model_name]
+            for p_run, n_run in zip(p_runs, n_runs, strict=True):
+                assert len(p_run["ruin_histogram"]) == 126
+                assert p_run["ruin_histogram"] == n_run["ruin_histogram"]
+                np.testing.assert_allclose(
+                    n_run["results"]["Terminal SPX"],
+                    p_run["results"]["Terminal SPX"], rtol=1e-9)
+                np.testing.assert_allclose(
+                    n_run["results"]["Terminal NAV"],
+                    p_run["results"]["Terminal NAV"], rtol=1e-6, atol=1e-3)
+
     def test_fewer_paths_than_workers_matches_process_backend(
             self, tmp_path, market_cache, call_with_timeout):
         # 3 paths over 4 workers used to hang both backends; now it runs as
