@@ -713,12 +713,19 @@ class HybridValuationVARSimulator(PathSimulator):
         random_block_starts = rng.integers(
             0, max_start_index + 1, size=(num_paths, num_blocks))
 
-        bootstrapped_residuals = np.zeros(
-            (num_paths, num_blocks * block_size, num_variables))
-        for path_idx in range(num_paths):
-            sampled_blocks = [self.residual_matrix[start: start + block_size]
-                              for start in random_block_starts[path_idx]]
-            bootstrapped_residuals[path_idx] = np.vstack(sampled_blocks)
+        # Fancy-indexed equivalent of the old per-path
+        # "vstack(residual_matrix[start:start+block_size] for start in ...)"
+        # loop: block_row_idx[p, b, k] is the residual_matrix row sampled
+        # for path p, block b, offset k within that block, so
+        # residual_matrix[block_row_idx] reproduces the same values in the
+        # same (path, block-major, within-block) order vstack did, from the
+        # same random_block_starts draws -- no RNG or ordering change.
+        block_offsets = np.arange(block_size)
+        block_row_idx = (
+            random_block_starts[:, :, None] + block_offsets[None, None, :])
+        bootstrapped_residuals = self.residual_matrix[block_row_idx]
+        bootstrapped_residuals = bootstrapped_residuals.reshape(
+            num_paths, num_blocks * block_size, num_variables)
         bootstrapped_residuals = (
                 bootstrapped_residuals[:, :simulation_months, :])
 
