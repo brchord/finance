@@ -24,10 +24,43 @@ import portfolio_models.fast_ladder as fast_ladder
 import portfolio_models.linear_models as lm
 
 from market_data.yf_fred_market_data import MarketDataManager
-from market_modelling.path_simulation import PathSimulator
+from market_modelling.fast_hybrid_path_simulation import (
+    simulate_hybrid_paths_fast)
+from market_modelling.fast_regime_switching_path_simulation import (
+    simulate_regime_switching_paths_fast)
+from market_modelling.path_simulation import (
+    HybridValuationVARSimulator, PathSimulator,
+    RegimeSwitchingValuationVARSimulator)
 from tax_models.regimes import build_tax_regime
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_paths_fast(
+    path_simulator: PathSimulator,
+    simulation_months: int,
+    num_paths: int,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Dispatches to a Numba-accelerated path generator when one exists for
+    path_simulator's type (market_modelling/fast_hybrid_path_simulation.py,
+    fast_regime_switching_path_simulation.py), else falls back to the
+    reference PathSimulator.simulate_paths unchanged. Both fast paths are
+    pinned bit-identical to their reference by their own parity tests
+    (tests/test_fast_hybrid_path_simulation.py,
+    tests/test_fast_regime_switching_path_simulation.py), so this dispatch
+    never changes results -- only which of the two supported models get
+    the faster path, for now.
+    """
+    if isinstance(path_simulator, HybridValuationVARSimulator):
+        return simulate_hybrid_paths_fast(
+            path_simulator, simulation_months, num_paths, seed=seed)
+    if isinstance(path_simulator, RegimeSwitchingValuationVARSimulator):
+        return simulate_regime_switching_paths_fast(
+            path_simulator, simulation_months, num_paths, seed=seed)
+    return path_simulator.simulate_paths(
+        simulation_months=simulation_months, num_paths=num_paths, seed=seed)
 
 
 class MonteCarloEngine:
@@ -180,9 +213,8 @@ class MonteCarloEngine:
         import numba
         numba.set_num_threads(1)
 
-        spx, cpi, tbill, tnote = path_simulator.simulate_paths(
-            simulation_months=simulation_months,
-            num_paths=num_paths, seed=seed)
+        spx, cpi, tbill, tnote = _generate_paths_fast(
+            path_simulator, simulation_months, num_paths, seed)
         final_spx = spx[:, -1]
 
         per_portfolio = []
