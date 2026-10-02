@@ -9,8 +9,7 @@ This module does not replace or modify LongSPYWithTreasuryLadders, which
 remains the reference implementation -- see tests/test_fast_ladder.py for
 the parity tests that pin this port to it.
 
-Structural simplifications applied here (see doc/plans/GPU Optimization
-Plan.md, "Structural simplifications available for a kernel"):
+Structural simplifications applied here:
 
 - TaxLotTracker reduces to two scalars. `buy()` is only ever called once,
   at month 0, so the single lot's cost basis is `spy_price` for the entire

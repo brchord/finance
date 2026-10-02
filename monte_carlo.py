@@ -500,8 +500,7 @@ class MonteCarloCLI:
                 was generated with, and the default so existing callers and
                 the golden snapshot are unaffected.
             "numba": executes the portfolio operator via
-                fast_ladder.run_simulation_fast_batch (see
-                doc/plans/GPU Optimization Plan.md, Stage 1/2) instead of a
+                fast_ladder.run_simulation_fast_batch instead of a
                 process pool running the scalar run_simulation per path.
                 Also fits each path simulator once per model instead of
                 once per portfolio, and generates each cell's market paths

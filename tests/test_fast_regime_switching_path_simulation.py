@@ -2,8 +2,7 @@
 Parity tests for market_modelling/fast_regime_switching_path_simulation.py
 against the reference RegimeSwitchingValuationVARSimulator.simulate_paths
 and RegimeSwitchingBootstrapSimulator.simulate_paths. A failure here must
-always mean a porting mistake, never an intentional behavior change --
-see doc/plans/GPU Optimization Plan.md.
+always mean a porting mistake, never an intentional behavior change.
 """
 import numpy as np
 import pytest

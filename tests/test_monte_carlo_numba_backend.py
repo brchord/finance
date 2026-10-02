@@ -1,6 +1,6 @@
 """
 Parity between MonteCarloCLI.run(backend="numba") and the default
-backend="process", per doc/plans/GPU Optimization Plan.md Stage 2.
+backend="process".
 
 backend="numba" draws market paths with the identical chunk-size/seed
 sequence backend="process" uses (see MonteCarloEngine._chunk_sizes), and

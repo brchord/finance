@@ -1,8 +1,8 @@
 """
-Stage 2 benchmark: MonteCarloCLI.run(backend="process") vs.
-backend="numba") wall-clock time, at (a reduced slice of) the large-run
-shape from doc/plans/GPU Optimization Plan.md: 2 models, 6 equity
-allocations, 6 spending levels, 1 tax regime, 50,000 paths, 756 months.
+Benchmark: MonteCarloCLI.run(backend="process") vs. backend="numba"
+wall-clock time, at (a reduced slice of) a large real-world run shape:
+2 models, 6 equity allocations, 6 spending levels, 1 tax regime, 50,000
+paths, 756 months.
 
 Not a test -- run manually:
     python benchmarks/bench_cli_backends.py [total_paths]

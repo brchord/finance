@@ -1,8 +1,7 @@
 """
 Parity tests for portfolio_models/fast_ladder.py against the reference
 LongSPYWithTreasuryLadders.run_simulation. A failure here must always mean
-a porting mistake in fast_ladder.py, never an intentional behavior change
--- see doc/plans/GPU Optimization Plan.md, Stage 1.
+a porting mistake in fast_ladder.py, never an intentional behavior change.
 
 Comparisons are exact (assert_array_equal), not approximate: a last-digit
 difference in the operator can flip a share-count or rebalancing
