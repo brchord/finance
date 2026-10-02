@@ -86,7 +86,7 @@ Lexicographic with tie tolerances. Defaults (adjustable):
 |---|---|---|---|
 | 0 | Ruin rate | lower | within 1 percentage point |
 | 1 | ES10 ruin age | later | within 1 year |
-| 2 | P10 return | higher | within 10% relative |
+| 2 | P10 return | higher | within 10% relative, on terminal wealth (1 + return) |
 | 3 | P50 return | higher | — (final decider) |
 
 Notes:
@@ -94,6 +94,9 @@ Notes:
   not beat 1.0% ruin with ES10 at 78. ES10 is conditional on ruin, so it
   says nothing about *how many* paths fail.
 - A cell with zero ruined paths has no ES10; treat it as best on step 1.
+- The P10 tolerance is measured on terminal wealth (1 + return), which is
+  always ≥ 0. A relative tolerance on the return itself breaks down near
+  zero, where the decision model's P10s often sit.
 - Pairwise tolerances aren't transitive (A≈B, B≈C, A≉C), so a plain
   `sort` is ill-defined. Use **anchored selection**: at each step, keep the
   candidates within tolerance of the *best* value among the current
@@ -266,9 +269,13 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 - **Ranked table** at a selected spending level (defaults to the max
   sustainable spending): allocation, ruin %, ruin count, ES10 age, P5, P10,
   P50, rank explanation, and the reference model's ruin % for context.
-- **"Refine around frontier"**: proposes the next run, with spending
-  bracketed around the current max at a finer step and equity narrowed
-  around the top-ranked allocations. Editable before launching.
+- **"Refine around frontier"**: proposes the next run, editable before
+  launching (`planner.decision.propose_refinement`):
+  - frontier bracketed → spending from the last passing to the first
+    failing level, split into ~4 equal steps (multiples of $500);
+  - every level passes → extend upward; none passes → extend downward;
+  - equity spans the top two allocations at the frontier, padded by half
+    the current step, at the next round step (10%, 5%, 2%, 1%).
 
 ### 2. Cell detail
 
