@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import job_files
 import monte_carlo as mc
 
 GOLDEN = Path(__file__).parent / "golden" / "monte_carlo_agg.json"
@@ -156,6 +157,21 @@ class TestRun:
         with pytest.raises(ValueError, match="not supported"):
             run_cli(tmp_path, market_cache, models=["NoSuchModel"])
 
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_progress_callback_counts_every_portfolio(
+            self, backend, tmp_path, market_cache):
+        calls = []
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": ALL_MODELS[:2], "total_paths": 4}))
+        cli = mc.MonteCarloCLI(str(config_file), str(market_cache),
+                               progress_callback=lambda *a: calls.append(a))
+        cli.run(backend=backend)
+        # 2 models x 2 equity x 2 spending x 2 regimes; the numba backend
+        # reports once per cell, covering both regime variants at once.
+        step = 1 if backend == "process" else 2
+        assert calls == [(done, 16) for done in range(step, 17, step)]
+
     def test_fewer_paths_than_workers_completes(
             self, tmp_path, market_cache, call_with_timeout):
         # Used to hang forever: 3 // 4 == 0 paths per chunk.
@@ -250,6 +266,73 @@ class TestCommandLine:
                    for sim in raw["simulations"][ALL_MODELS[0]])
         assert ALL_MODELS[0] in json.loads(agg_file.read_text())["results"]
 
+    def test_requires_outputs_without_job_dir(self, monkeypatch, capsys):
+        self.set_command_line(monkeypatch, ["-c", "cfg.json"])
+        with pytest.raises(SystemExit):
+            mc.parse_args()
+        err = capsys.readouterr().err
+        assert "-r/--raw-output-file" in err
+        assert "-o/--aggregated-output-file" in err
+        assert "-c/--config-file" not in err
+
+    @pytest.mark.parametrize("flag", ["-j", "--job-dir"])
+    def test_job_dir_supplies_config_and_results_paths(
+            self, flag, monkeypatch):
+        self.set_command_line(monkeypatch, [flag, "runs/abc"])
+        args = mc.parse_args()
+        assert args.config_filename == os.path.join("runs/abc", "config.json")
+        assert args.agg_output_filename == os.path.join(
+            "runs/abc", "results.json")
+        assert args.raw_output_filename is None
+
+    def test_explicit_paths_override_job_dir(self, monkeypatch):
+        self.set_command_line(monkeypatch, [
+            "--job-dir", "runs/abc", "-c", "cfg.json", "-o", "agg.json",
+            "-r", "raw.json"])
+        args = mc.parse_args()
+        assert (args.config_filename, args.agg_output_filename,
+                args.raw_output_filename) == (
+                    "cfg.json", "agg.json", "raw.json")
+
+    def test_main_with_job_dir(self, tmp_path, market_cache, monkeypatch):
+        config = {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        self.set_command_line(monkeypatch, [
+            "--job-dir", str(tmp_path), "-m", str(market_cache),
+            "--backend", "numba"])
+        mc.main()
+
+        status = json.loads((tmp_path / "status.json").read_text())
+        assert status["state"] == job_files.SUCCEEDED
+        assert status["pid"] == os.getpid()
+        assert (status["cells_done"], status["cells_total"]) == (8, 8)
+        assert status["error"] is None
+
+        meta = json.loads((tmp_path / "meta.json").read_text())
+        assert meta["master_seed"] == SWEEP["master_seed"]
+        assert meta["backend"] == "numba"
+        assert "engine_commit" in meta
+
+        results = json.loads((tmp_path / "results.json").read_text())
+        assert len(results["results"][ALL_MODELS[0]]) == 8
+        # Raw output is opt-in with --job-dir, and nothing is left behind
+        # by the atomic writes.
+        assert sorted(f.name for f in tmp_path.iterdir()) == [
+            "config.json", "meta.json", "results.json", "status.json"]
+
+    def test_main_with_job_dir_records_failure(
+            self, tmp_path, market_cache, monkeypatch):
+        config = {**SWEEP, "models": ["NoSuchModel"], "total_paths": 4}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        self.set_command_line(monkeypatch, [
+            "--job-dir", str(tmp_path), "-m", str(market_cache)])
+        with pytest.raises(ValueError):
+            mc.main()
+        status = json.loads((tmp_path / "status.json").read_text())
+        assert status["state"] == job_files.FAILED
+        assert "NoSuchModel not supported" in status["error"]
+        assert not (tmp_path / "results.json").exists()
+
 
 class TestAggregate:
     @staticmethod
@@ -282,6 +365,8 @@ class TestAggregate:
         assert entry["ruin_month_es5"] == 1.0
         assert entry["ruin_month_es10"] == 1.0
         assert entry["allocation"] == "60-40"
+        assert entry["equity"] == 0.6
+        assert entry["ruin_histogram"] == [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0]
 
     def test_no_ruin_reports_nones(self, tmp_path, market_cache):
         entry = self.build(tmp_path, market_cache, [0.0] * 12,
