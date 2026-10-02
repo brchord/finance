@@ -57,6 +57,25 @@ class TestMCConfig:
         assert cfg.tax_regimes == ["none"]
         assert cfg.total_portfolios() == 18
 
+    @pytest.mark.parametrize("years,months", [
+        (10, 120), (10.0, 120), (10.5, 126), (63, 756),
+        (35.3, 424),  # 423.6 months rounds up, not truncated to 423
+    ])
+    def test_simulation_months_is_rounded_int(self, years, months):
+        cfg = self.make(years_to_simulate=years)
+        assert cfg.simulation_months == months
+        assert type(cfg.simulation_months) is int
+        assert cfg.years == years  # reported value is left as given
+
+    def test_warns_only_when_years_are_not_whole_months(self, caplog):
+        with caplog.at_level("WARNING"):
+            self.make(years_to_simulate=10.5)
+            self.make(years_to_simulate=10.0)
+        assert not caplog.records
+        with caplog.at_level("WARNING"):
+            self.make(years_to_simulate=35.3)
+        assert "not a whole number" in caplog.text
+
     def test_allocations_sum_to_one_and_are_rounded(self):
         for p in self.make().portfolio_configs():
             assert p["equity_allocation"] + p["ladder_allocation"] == 1.0
@@ -135,6 +154,91 @@ class TestRun:
     def test_unknown_model_rejected(self, tmp_path, market_cache):
         with pytest.raises(ValueError, match="not supported"):
             run_cli(tmp_path, market_cache, models=["NoSuchModel"])
+
+    def test_fewer_paths_than_workers_completes(
+            self, tmp_path, market_cache, call_with_timeout):
+        # Used to hang forever: 3 // 4 == 0 paths per chunk.
+        cli = call_with_timeout(
+            lambda: run_cli(tmp_path, market_cache, total_paths=3, workers=4))
+        for sims in cli.raw_results["simulations"].values():
+            for sim in sims:
+                assert len(sim["results"]["Terminal NAV"]) == 3
+                assert len(sim["results"]["Terminal SPX"]) == 3
+                assert len(sim["ruin_histogram"]) == 120
+
+
+class TestChunkSizes:
+    def test_fewer_paths_than_workers_terminates(self, call_with_timeout):
+        chunks = call_with_timeout(
+            lambda: mc.MonteCarloEngine._chunk_sizes(3, 4), seconds=5)
+        assert chunks == [1, 1, 1]
+
+    @pytest.mark.parametrize("total_paths,n_workers,expected", [
+        (20, 2, [10, 10]),
+        (37, 4, [9, 9, 9, 9, 1]),
+        (50_000, 20, [2_500] * 20),
+        (4, 4, [1, 1, 1, 1]),
+    ])
+    def test_unchanged_when_paths_cover_workers(
+            self, total_paths, n_workers, expected):
+        # Chunk sizes decide each chunk's seed, so any change here would
+        # silently change results (and the golden snapshot).
+        assert mc.MonteCarloEngine._chunk_sizes(
+            total_paths, n_workers) == expected
+
+    @pytest.mark.parametrize("total_paths", range(1, 30))
+    @pytest.mark.parametrize("n_workers", [1, 2, 3, 7, 20])
+    def test_chunks_cover_every_path(
+            self, total_paths, n_workers, call_with_timeout):
+        chunks = call_with_timeout(
+            lambda: mc.MonteCarloEngine._chunk_sizes(total_paths, n_workers),
+            seconds=5)
+        assert sum(chunks) == total_paths
+        assert all(c > 0 for c in chunks)
+
+
+class TestCommandLine:
+    REQUIRED = ["-c", "cfg.json", "-r", "raw.json", "-o", "agg.json"]
+
+    def test_backend_defaults_to_process(self):
+        assert mc.parse_args(self.REQUIRED).backend == "process"
+
+    @pytest.mark.parametrize("flag", ["-b", "--backend"])
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_backend_flag(self, flag, backend):
+        assert mc.parse_args(
+            self.REQUIRED + [flag, backend]).backend == backend
+
+    def test_unknown_backend_rejected(self):
+        with pytest.raises(SystemExit):
+            mc.parse_args(self.REQUIRED + ["--backend", "bogus"])
+
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_main_runs_requested_backend(
+            self, backend, tmp_path, market_cache, monkeypatch):
+        calls = []
+        original_run = mc.MonteCarloCLI.run
+
+        def spy(self, *, backend="process"):
+            calls.append(backend)
+            return original_run(self, backend=backend)
+
+        monkeypatch.setattr(mc.MonteCarloCLI, "run", spy)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}))
+        raw_file, agg_file = tmp_path / "raw.json", tmp_path / "agg.json"
+
+        mc.main(["-c", str(config_file), "-r", str(raw_file),
+                 "-o", str(agg_file), "-m", str(market_cache),
+                 "--backend", backend])
+
+        assert calls == [backend]
+        raw = json.loads(raw_file.read_text())
+        assert list(raw["simulations"]) == [ALL_MODELS[0]]
+        assert all(len(sim["results"]["Terminal NAV"]) == 4
+                   for sim in raw["simulations"][ALL_MODELS[0]])
+        assert ALL_MODELS[0] in json.loads(agg_file.read_text())["results"]
 
 
 class TestAggregate:

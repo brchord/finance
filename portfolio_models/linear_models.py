@@ -482,7 +482,7 @@ class LongSPYWithTreasuryLadders(InvestmentStrategy):
                 monthly_withdrawal, m, tnotes)
             div_events_expected = math.floor(
                 req_liquidity / monthly_withdrawal / 3.0)
-            expected_dividends = (spy_position_size * spy_price *
+            expected_dividends = (spy_position_size * day_spy *
                                   self.spy_div_yield *
                                   (div_events_expected / 4.0))
             spending_needs = req_liquidity - expected_dividends
