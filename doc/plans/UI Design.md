@@ -1,0 +1,323 @@
+# Monte Carlo Retirement Engine — UI Design Plan
+
+This document captures the design decisions for adding a local web UI to the
+Monte Carlo simulation engine (`monte_carlo.py`). It is the reference for
+implementation work in Claude Code.
+
+## Context
+
+- The engine is pure Python with Numba-compiled hot paths, driven by a CLI
+  (`monte_carlo.py`), and uses a `ProcessPoolExecutor` for parallelism.
+- A run is a **sweep**: the config defines a spending range, an equity
+  allocation range, a list of tax regimes and a list of models. The engine
+  simulates every combination ("cell") with `total_paths` paths. Example:
+  spending 80k–120k step 5k × equity 30–80% step 10% × 2 models = 54 cells.
+- Config (JSON): `initial_nav`, `retirement_age`, `years_to_simulate`,
+  `yearly_spending_floor/ceil`, `spend_increments`, `equity_floor/ceil`,
+  `weight_increments`, `total_paths`, `models`, `tax_regimes`,
+  `master_seed` (optional), `workers`.
+- Outputs today: a raw JSON (per-path terminal NAVs, ~230 MB at 50k paths —
+  the UI must never read it) and an aggregated JSON with one entry per cell.
+- Ruin timing is tracked in **months since retirement**
+  (`ruin_histogram`, one bin per month). The UI converts to ages:
+  `age = retirement_age + month / 12`.
+- With `--backend numba` (~47x faster than the original backend), a full
+  run takes far less than the original 15–30 min. Measure it on the real
+  config before sizing the progress UI.
+- Current visualization is a Jupyter notebook.
+- **Single user, local only.** No auth, no hosting.
+- Use case: a recurring review every 6–12 months to recalibrate the plan
+  from actual NAV.
+
+## Goals
+
+1. Answer the review's central question fast: **what is the highest yearly
+   spending I can sustain, and with which equity allocation?**
+2. Support the actual workflow: a wide sweep first, then progressively finer
+   sweeps zooming in on the frontier.
+3. Replace the notebook with a persistent dashboard.
+4. Keep the engine a standalone program; the CLI keeps working as-is.
+
+## Decision model
+
+This is how the user chooses a cell. The UI encodes it rather than leaving
+the user to scan tables.
+
+### Models
+
+- **Decision model:** `RegimeSwitchingValuationVARSimulator` (regime switching
+  with VAR and CAPE discount — the most conservative). All gating and
+  ranking uses this model only.
+- **Reference model** (shown alongside, never used for decisions):
+  `RegimeSwitchingBootstrapSimulator` by default (same family, no CAPE
+  discounting). The user can switch the reference to
+  `HybridValuationVARSimulator`. No other model options are needed.
+
+### Tax regime
+
+Fixed to `pre_tcja_reversion` (the biggest tax drag). The UI does not
+compare tax regimes; the field is an advanced setting at most.
+
+### Ruin ceiling
+
+- Default **5%**. Both candidate models are conservative and the tax regime
+  is worst-case, so 5% is already a cautious threshold.
+- Adjustable in the UI. Changing it only re-evaluates results on disk.
+- A cell **passes** if the decision model's ruin rate ≤ ceiling.
+
+### Headline: maximum sustainable spending
+
+The highest spending level at which at least one allocation passes. Report:
+
+- **Bracket** (hard answer): last passing spending level and the first
+  failing one, e.g. "95k ✓ / 100k ✗".
+- **Interpolated estimate** (hint): take the minimum ruin rate across
+  allocations at each spending level, and linearly interpolate where it
+  crosses the ceiling. Label it as an estimate. A wide gap between the
+  bracket and the estimate suggests running a refinement.
+- Flag the result when the deciding cell's ruin rate is within ~2 standard
+  errors of the ceiling (`SE = sqrt(p(1-p)/n)`).
+
+### Ranking passing cells
+
+Lexicographic with tie tolerances. Defaults (adjustable):
+
+| Step | Criterion | Better | Tied if |
+|---|---|---|---|
+| 0 | Ruin rate | lower | within 1 percentage point |
+| 1 | ES10 ruin age | later | within 1 year |
+| 2 | P10 return | higher | within 10% relative |
+| 3 | P50 return | higher | — (final decider) |
+
+Notes:
+- Ruin rate still counts after the gate: 4.9% ruin with ES10 at 79 must
+  not beat 1.0% ruin with ES10 at 78. ES10 is conditional on ruin, so it
+  says nothing about *how many* paths fail.
+- A cell with zero ruined paths has no ES10; treat it as best on step 1.
+- Pairwise tolerances aren't transitive (A≈B, B≈C, A≉C), so a plain
+  `sort` is ill-defined. Use **anchored selection**: at each step, keep the
+  candidates within tolerance of the *best* value among the current
+  candidates and drop the rest; the survivor after step 3 is the winner.
+  For a full ranking, remove the winner and repeat.
+- Show *why* each cell ranks where it does, e.g. "tied on ruin and ES10,
+  won on P10".
+- The main use is ranking the allocations at one spending level (in
+  particular at the max sustainable spending), but the same function can
+  rank any set of cells.
+
+## Technology decision
+
+**Streamlit**, run locally with `streamlit run app.py`. Plotly for charts.
+UI dependencies go in a separate `requirements-ui.txt` so the engine's
+pinned `requirements.txt` is unaffected.
+
+Rationale: stays in Python, minimal code, strong fit for single-user data
+dashboards and what-if exploration. Rejected alternatives: Dash (more
+boilerplate, built for multi-user apps), Panel/Voilà (awkward as the UI
+grows), NiceGUI (less data-focused), Textual (doesn't solve visualization).
+
+## Core architectural rule
+
+> **The UI never imports or calls the engine's simulation functions
+> directly.** It only launches the CLI as a subprocess and reads the files
+> the CLI writes.
+
+Why:
+- Streamlit reruns the script on every interaction in a per-session thread.
+  A long blocking call there is fragile: refresh, closed tab or a stray
+  widget click can lose the run.
+- Process pools inside Streamlit break: with `spawn`, workers re-import
+  Streamlit's runner rather than our module; with `fork`, forking a
+  multithreaded server can deadlock.
+- A detached subprocess running the CLI has a normal `__main__`, so
+  multiprocessing behaves exactly as it does today, and jobs survive
+  browser closes and UI restarts.
+
+The UI may import pure helpers that don't touch simulation code (its own
+schema/loading code, the ranking logic). It always launches the CLI with
+`--backend numba`.
+
+## Data model: review → runs → cells
+
+```
+reviews/                          # gitignored
+  <review_id>/                    # e.g. 2026-10-02-q4
+    review.json                   # label, date, the shared profile (below)
+    runs/
+      <config_hash>/
+        config.json               # exact CLI input
+        status.json               # progress + state, written by the CLI
+        results.json              # aggregated results, written on success
+        meta.json                 # timestamps, engine git commit, seed, backend
+        log.txt                   # CLI stdout/stderr
+```
+
+- A **review** is a NAV snapshot at a point in time. It fixes the profile
+  shared by all its runs: `initial_nav`, `retirement_age`,
+  `years_to_simulate`, tax regime. The UI enforces this; runs with a
+  different profile belong in a different review.
+- A **run** is one CLI invocation (one sweep). Its folder is keyed by a hash
+  of the canonicalized `config.json`.
+- The UI always sets `master_seed` (random per run, recorded) so every run
+  is reproducible and the hash is meaningful.
+- **Cells merge across runs within a review.** A cell's key is
+  `(model, spending, equity, tax_regime)`. If several runs computed the same
+  cell, the one with the most paths wins (ties: the newest). The explorer
+  always shows the merged view, so the frontier fills in as you refine.
+- **Dedup:** if a run folder with the same hash already has `results.json`,
+  reuse it; if it is running, show its progress instead of relaunching.
+
+### Job handling
+
+Runs are much shorter now, so job tracking is deliberately light:
+
+- **Launch:** UI writes `config.json`, then starts
+  `monte_carlo.py --job-dir <run_dir> --backend numba` with
+  `subprocess.Popen(..., start_new_session=True)`, stdout/stderr to
+  `log.txt`.
+- **Progress:** progress bar from `status.json`, polled with
+  `st.fragment(run_every=2)` while a run is active. Shown inline on the
+  explorer page; there is no separate monitor page.
+- **Cancel:** kill the process group by PID.
+- **Stale detection:** `state == "running"` but the PID is gone → failed.
+
+`status.json`:
+
+```json
+{
+  "state": "running",
+  "pid": 12345,
+  "cells_done": 21,
+  "cells_total": 54,
+  "started_at": "2026-10-02T19:02:11",
+  "updated_at": "2026-10-02T19:02:40",
+  "error": null
+}
+```
+
+`state` is one of `running`, `succeeded`, `failed` (with `error`).
+
+## Required CLI / engine changes
+
+1. **`--job-dir <dir>`:** reads `<dir>/config.json`; writes `status.json`,
+   `results.json` and `meta.json` into the folder. With `--job-dir`, the
+   `-c/-r/-o` flags are not required. The raw output is skipped unless
+   `-r` is given. Without `--job-dir`, behaviour is unchanged. All parsing
+   stays inside `parse_args()` (no argv parameters).
+2. **Status reporting:** write `status.json` at start, as cells complete,
+   on success and on failure (with the error message).
+3. **Atomic writes:** write to a temp file in the same folder, then
+   `os.replace()`, so the UI never reads a half-written file.
+4. **Ruin histogram in aggregated results:** already present in the raw
+   output; copy it into each aggregated cell entry. It enables the survival
+   curve.
+5. **Per-year percentile bands (later):** keep an annual NAV snapshot per
+   path in both backends (the Numba kernel in `portfolio_models/fast_ladder.py`
+   and the process backend), compute per-year P5/P10/P25/P50 in the reduce
+   step, and store only those arrays. This is the only invasive engine
+   change, and it must keep the backends' bit-identical guarantees.
+
+## Results data contract (`results.json`)
+
+Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
+`total_paths`, `retirement_age`, `results: {model: [cell, ...]}`). Per cell:
+
+- `spending`, `allocation`, `tax_regime` (existing; add a numeric `equity`
+  so the UI doesn't parse the `"60-40"` string)
+- `ruin_path_count`, `ruin_month_min`, `ruin_month_median`,
+  `ruin_month_es5`, `ruin_month_es10` (existing)
+- `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
+- `ruin_histogram`: monthly counts over the horizon (new)
+- later: `bands: {ages: [], p5: [], p10: [], p25: [], p50: []}`
+
+Ruin rate = `ruin_path_count / total_paths`. Survival curve:
+`P(solvent at month m) = 1 - cumsum(ruin_histogram)[m] / total_paths`.
+
+## Design principles
+
+- **Spending first.** Yearly spending is the most important dimension and
+  the main axis of every primary view.
+- **Downside first.** Show only the median and below; upper percentiles
+  aren't displayed (good years are captured by recalibrating from actual
+  NAV at the next review). Exception: P50 is used as the final tie-breaker.
+- **Decision vs reference.** The decision model drives every headline and
+  ranking; the reference model is shown for context, visually secondary.
+- **Show the reasoning.** Rankings explain themselves; numbers near a
+  threshold carry a noise flag.
+- **De-emphasize minimum ruin age.** It is set by a single path. Show it as
+  a detail only.
+
+## Pages
+
+### 1. Explorer (main page)
+
+- **Review selector** (latest by default) and **sweep inputs**: spending
+  floor/ceil/step, equity floor/ceil/step, paths. Profile fields come from
+  the review. "Run" launches a run (or reuses a cached one); progress shows
+  inline.
+- **Controls:** ruin ceiling (default 5%), reference model
+  (`RegimeSwitchingBootstrapSimulator` | `HybridValuationVARSimulator`),
+  tie tolerances (collapsed by default).
+- **Headline:** maximum sustainable spending, as bracket + interpolated
+  estimate, with the winning allocation at that level.
+- **P(ruin) vs spending chart:** one line per allocation for the decision
+  model, ceiling as a horizontal line, merged across all runs in the
+  review. Reference model available as a toggle or a secondary panel.
+- **Ranked table** at a selected spending level (defaults to the max
+  sustainable spending): allocation, ruin %, ruin count, ES10 age, P5, P10,
+  P50, rank explanation, and the reference model's ruin % for context.
+- **"Refine around frontier"**: proposes the next run, with spending
+  bracketed around the current max at a finer step and equity narrowed
+  around the top-ranked allocations. Editable before launching.
+
+### 2. Cell detail
+
+For a selected (spending, allocation):
+- KPI cards: ruin rate (headline), ES10 and ES5 ruin age, P10 and P50
+  return; minimum ruin age as a small detail. Decision model next to the
+  reference model.
+- Survival curves: decision and reference on the same axes, the ceiling
+  marked.
+- Ruin-age histogram.
+- Fan chart (after the per-year bands exist).
+
+### 3. History
+
+- Timeline across reviews: max sustainable spending, plus ruin rate and
+  ES10 of the chosen cell.
+- Side-by-side diff of two reviews: profile changes and result changes.
+- Survival curve overlay of the chosen cell, current vs previous review.
+  An upward shift after a good stretch is the signal to consider raising
+  spending.
+
+## Streamlit implementation notes
+
+- Multi-page layout: `app.py` plus a `pages/` directory.
+- Results are cached on disk in the run folders; use `st.cache_data` only
+  for loading/parsing JSON, keyed on path + mtime.
+- Keep the selected review, cell and controls in `st.session_state`.
+- Keep the decision logic (merge, gate, max sustainable spending, ranking)
+  in a plain Python module with no Streamlit imports, so it is unit-tested
+  like the rest of the repo.
+- Nothing in the UI blocks for more than a moment; long work always happens
+  in the subprocess.
+
+## Implementation order
+
+1. **CLI:** `--job-dir`, `status.json`, atomic writes, `meta.json`,
+   `ruin_histogram` and numeric `equity` in aggregated cells.
+2. **Decision logic module + tests:** load and merge runs, gate, max
+   sustainable spending (bracket + interpolation), anchored ranking.
+3. **Minimal explorer:** create/load a review, launch a run, inline
+   progress, headline, P(ruin)-vs-spending chart, ranked table.
+4. **Cell detail:** KPI cards, survival curves, histogram, reference-model
+   switch.
+5. **Refine around frontier.**
+6. **Per-year bands** in both backends, then the fan chart.
+7. **History page.**
+
+## For `CLAUDE.md`
+
+Add a pointer to this file plus the core rule: *the UI launches the CLI as
+a detached subprocess and only reads its output files; it never runs
+simulation code in the Streamlit process.*
