@@ -96,3 +96,32 @@ def test_cell_page(monkeypatch, reviews_with_run):
 def test_history_page(monkeypatch, reviews_with_run):
     at = run_page(monkeypatch, reviews_with_run, "views/history.py")
     assert len(at.dataframe) == 2  # timeline table and review diff
+
+
+def test_run_button_launches_a_run(monkeypatch, tmp_path, market_cache):
+    review = store.create_review("Fresh", dt.date(2026, 10, 2), PROFILE,
+                                 root=tmp_path)
+    # Point launches at the synthetic market instead of the real cache.
+    original_launch = store.launch
+    monkeypatch.setattr(
+        store, "launch", lambda r, sw, **kw: original_launch(
+            r, sw, market_cache=market_cache, workers=2))
+    at = run_page(monkeypatch, tmp_path)
+    for key, value in (("sp_floor", 60_000.0), ("sp_ceil", 100_000.0),
+                       ("sp_step", 40_000.0), ("eq_floor", 40),
+                       ("eq_ceil", 60), ("eq_step", 20), ("paths", 200)):
+        at.number_input(key=key).set_value(value)
+    next(b for b in at.button if b.label == "Run").click().run()
+    assert not at.exception, at.exception
+
+    runs = store.list_runs(review)
+    assert len(runs) == 1
+    assert runs[0].sweep == store.Sweep(
+        spending_floor=60_000, spending_ceil=100_000, spending_step=40_000,
+        equity_floor=0.4, equity_ceil=0.6, equity_step=0.2, total_paths=200)
+    deadline = time.monotonic() + 120
+    while store.load_run(runs[0].path).active:
+        assert time.monotonic() < deadline, "run did not finish"
+        time.sleep(0.2)
+    at.run()
+    assert "Max sustainable spending" in [m.label for m in at.metric]
