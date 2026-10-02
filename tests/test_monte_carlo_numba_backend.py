@@ -1,0 +1,92 @@
+"""
+Parity between MonteCarloCLI.run(backend="numba") and the default
+backend="process", per doc/plans/GPU Optimization Plan.md Stage 2.
+
+backend="numba" draws market paths with the identical chunk-size/seed
+sequence backend="process" uses (see MonteCarloEngine._chunk_sizes), so for
+the same config both backends simulate bit-identical market paths; any
+remaining difference in Terminal NAV/SPX reduces to the reference-vs-
+fast_ladder kernel difference already covered at rel=1e-9 by
+tests/test_fast_ladder.py.
+"""
+import json
+
+import numpy as np
+import pytest
+
+import monte_carlo as mc
+
+SWEEP = dict(
+    yearly_spending_floor=80_000, yearly_spending_ceil=90_000,
+    spend_increments=10_000, equity_floor=0.5, equity_ceil=0.6,
+    weight_increments=0.1, initial_nav=1_000_000, years_to_simulate=10,
+    retirement_age=60, total_paths=37, workers=4,  # odd/uneven on purpose,
+    # to exercise _chunk_sizes' uneven-remainder branch identically on
+    # both backends.
+    tax_regimes=["none", "current_law_indexed", "historical_average_drift"],
+    master_seed=123)
+ALL_MODELS = [m.name() for m in mc.MonteCarloCLI.SUPPORTED_MODELS]
+
+
+def run_cli(tmp_path, market_cache, tag, backend, **overrides):
+    config = {**SWEEP, "models": ALL_MODELS, **overrides}
+    config_file = tmp_path / f"{tag}.json"
+    config_file.write_text(json.dumps(config))
+    cli = mc.MonteCarloCLI(str(config_file), str(market_cache))
+    cli.run(backend=backend)
+    return cli
+
+
+class TestNumbaBackendMatchesProcessBackend:
+    def test_terminal_values_and_ruin_histograms_match(
+            self, tmp_path, market_cache):
+        process_cli = run_cli(tmp_path, market_cache, "process", "process")
+        numba_cli = run_cli(tmp_path, market_cache, "numba", "numba")
+
+        process_sims = process_cli.raw_results["simulations"]
+        numba_sims = numba_cli.raw_results["simulations"]
+
+        assert set(process_sims.keys()) == set(numba_sims.keys())
+
+        for model_name in process_sims:
+            p_runs = process_sims[model_name]
+            n_runs = numba_sims[model_name]
+            assert len(p_runs) == len(n_runs)
+
+            for p_run, n_run in zip(p_runs, n_runs):
+                assert p_run["spending"] == n_run["spending"]
+                assert p_run["equity"] == n_run["equity"]
+                assert p_run["tax_regime"] == n_run["tax_regime"]
+
+                p_spx = np.array(p_run["results"]["Terminal SPX"])
+                n_spx = np.array(n_run["results"]["Terminal SPX"])
+                np.testing.assert_allclose(
+                    n_spx, p_spx, rtol=1e-9,
+                    err_msg=(f"Terminal SPX mismatch: model={model_name} "
+                             f"spending={p_run['spending']} "
+                             f"equity={p_run['equity']} "
+                             f"regime={p_run['tax_regime']}"))
+
+                p_nav = np.array(p_run["results"]["Terminal NAV"])
+                n_nav = np.array(n_run["results"]["Terminal NAV"])
+                np.testing.assert_allclose(
+                    n_nav, p_nav, rtol=1e-6, atol=1e-3,
+                    err_msg=(f"Terminal NAV mismatch: model={model_name} "
+                             f"spending={p_run['spending']} "
+                             f"equity={p_run['equity']} "
+                             f"regime={p_run['tax_regime']}"))
+
+                np.testing.assert_array_equal(
+                    p_run["ruin_histogram"], n_run["ruin_histogram"],
+                    err_msg=(f"Ruin histogram mismatch: model={model_name} "
+                             f"spending={p_run['spending']} "
+                             f"equity={p_run['equity']} "
+                             f"regime={p_run['tax_regime']}"))
+
+    def test_rejects_unknown_backend(self, tmp_path, market_cache):
+        config = {**SWEEP, "models": ALL_MODELS}
+        config_file = tmp_path / "bogus.json"
+        config_file.write_text(json.dumps(config))
+        cli = mc.MonteCarloCLI(str(config_file), str(market_cache))
+        with pytest.raises(ValueError, match="Unknown backend"):
+            cli.run(backend="bogus")

@@ -20,10 +20,12 @@ import numpy as np
 import pandas as pd
 
 import market_modelling.path_simulation as ps
+import portfolio_models.fast_ladder as fast_ladder
 import portfolio_models.linear_models as lm
 
 from market_data.yf_fred_market_data import MarketDataManager
 from market_modelling.path_simulation import PathSimulator
+from tax_models.regimes import build_tax_regime
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,75 @@ class MonteCarloEngine:
 
         return final_spx, final_navs, ruin_histogram
 
+    @staticmethod
+    def _chunk_sizes(total_paths: int, n_workers: int) -> List[int]:
+        """
+        Splits total_paths into per-worker chunk sizes. Shared by submit()
+        (backend="process") and MonteCarloCLI._run_numba()'s path
+        generation (backend="numba"), so both draw the identical sequence
+        of per-chunk seeds from a cell's seed and therefore simulate
+        bit-identical market paths for the same cell.
+
+        NOTE: reproduces the known chunk_size == 0 infinite loop when
+        total_paths < n_workers -- see doc/plans/GPU Optimization Plan.md,
+        "Decisions reserved for the user". Not fixed here.
+        """
+        chunk_size = total_paths // n_workers
+        chunks = []
+
+        remaining_paths = total_paths
+        while remaining_paths > 0:
+            current_batch_size = min(chunk_size, remaining_paths)
+            chunks.append(current_batch_size)
+            remaining_paths -= current_batch_size
+        return chunks
+
+    @staticmethod
+    def _execute_cell_batch_fast(
+        path_simulator: PathSimulator,
+        simulation_months: int,
+        initial_nav: float,
+        num_paths: int,
+        seed: int,
+        portfolio_params: List[Tuple[float, float, float, float, tuple]],
+    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]:
+        """
+        Worker for backend="numba" (MonteCarloCLI._run_numba): generates
+        one chunk of a CELL's market paths once, inside this worker
+        process, then evaluates every tax-regime variant of that cell
+        (`portfolio_params`, each a (equity_allocation, ladder_allocation,
+        yearly_spending, spy_div_yield, flattened_tax_regime) tuple)
+        against that single chunk via fast_ladder.run_simulation_fast_batch.
+
+        This is the key difference from backend="process"'s
+        _execute_strategy_batch: paths are generated once per cell instead
+        of once per tax-regime variant, and the (potentially ~GB-scale)
+        path arrays never leave this process -- only the much smaller
+        final_navs/ruin_months arrays are pickled back to the parent.
+
+        Runs single-threaded (numba.set_num_threads(1)): this function
+        itself is already run in parallel by a ProcessPoolExecutor across
+        chunks, same as backend="process"; letting run_simulation_fast_
+        batch's internal prange also claim every core per worker would
+        oversubscribe them.
+        """
+        import numba
+        numba.set_num_threads(1)
+
+        spx, cpi, tbill, tnote = path_simulator.simulate_paths(
+            simulation_months=simulation_months,
+            num_paths=num_paths, seed=seed)
+        final_spx = spx[:, -1]
+
+        per_portfolio = []
+        for equity, ladder, spending, div, flat in portfolio_params:
+            final_navs, ruin_months = fast_ladder.run_simulation_fast_batch(
+                spx, cpi, tbill, tnote, initial_nav, simulation_months,
+                equity, ladder, spending, div, *flat)
+            per_portfolio.append((final_navs, ruin_months))
+
+        return final_spx, per_portfolio
+
     def submit(
         self,
         executor: ProcessPoolExecutor,
@@ -137,14 +208,7 @@ class MonteCarloEngine:
         order, so results stay deterministic. Pass the returned futures to
         collect().
         """
-        chunk_size = total_paths // n_workers
-        chunks = []
-
-        remaining_paths = total_paths
-        while remaining_paths > 0:
-            current_batch_size = min(chunk_size, remaining_paths)
-            chunks.append(current_batch_size)
-            remaining_paths -= current_batch_size
+        chunks = self._chunk_sizes(total_paths, n_workers)
 
         return [
             executor.submit(
@@ -367,11 +431,44 @@ class MonteCarloCLI:
             logging.error("Error loading tool configuration: %s", str(exc))
             raise exc
 
-    def run(self):
+    def run(self, *, backend: str = "process"):
         """
         Starts the simulation, collects results and stores them into a
         dictionary for further serialization and/or aggreggation analysis.
+
+        Parameters:
+        -----------
+        backend : str, default="process"
+            "process": the original ProcessPoolExecutor-based execution.
+                Unchanged; this is what tests/golden/monte_carlo_agg.json
+                was generated with, and the default so existing callers and
+                the golden snapshot are unaffected.
+            "numba": executes the portfolio operator via
+                fast_ladder.run_simulation_fast_batch (see
+                doc/plans/GPU Optimization Plan.md, Stage 1/2) instead of a
+                process pool running the scalar run_simulation per path.
+                Also fits each path simulator once per model instead of
+                once per portfolio, and generates each cell's market paths
+                once instead of once per tax-regime variant within it --
+                both pure deduplication of work the "process" backend
+                redundantly repeats for every tax-regime variant of a cell
+                (same cell_seed, so bit-identical results either way), not
+                a change to the statistical design. Uses the identical
+                chunk-size/seed sequence as "process" (see
+                MonteCarloEngine._chunk_sizes), so for the same config,
+                "numba" simulates bit-identical market paths to "process";
+                any remaining difference in Terminal NAV reduces to the
+                reference-vs-fast_ladder kernel difference already covered
+                by tests/test_fast_ladder.py (rel=1e-9).
         """
+        if backend == "process":
+            return self._run_process_pool()
+        if backend == "numba":
+            return self._run_numba()
+        raise ValueError(
+            f"Unknown backend '{backend}'. Supported: process, numba")
+
+    def _run_process_pool(self):
         if self.raw_results is not None:
             raise RuntimeError(
                 "CLI run can only be run once per instantiation")
@@ -475,6 +572,185 @@ class MonteCarloCLI:
                     "ruin_histogram": ruin_histogram.tolist(),
                     "results": run_output
                 })
+                data_end = time.perf_counter()
+                perf_counters[model_name]["data_storage"].append(
+                    data_end - data_start)
+
+        results["perf_data"] = perf_counters
+        self.raw_results = results
+
+    def _run_numba(self):
+        """
+        See run()'s "numba" backend docstring.
+
+        Still uses a ProcessPoolExecutor -- not threads. Measured directly:
+        threading path generation (plain numpy/Python code, not
+        Numba-jitted) made it ~5x SLOWER here, not faster, since the
+        simulators' per-step Python loops barely release the GIL and
+        concurrent numpy/BLAS calls from several threads mostly just
+        contend with each other. Processes avoid that, same as
+        backend="process" today.
+
+        What changes from backend="process" is the unit of work: each
+        worker call (_execute_cell_batch_fast) now covers one chunk of an
+        entire CELL (every tax-regime variant of one (model, equity,
+        spending) combination) instead of one chunk of a single portfolio.
+        The worker generates that chunk's market paths once, evaluates
+        every regime's portfolio operator against them via
+        fast_ladder.run_simulation_fast_batch, and returns only the
+        resulting final_navs/ruin_months arrays -- the (potentially
+        ~GB-scale) path arrays themselves never cross a process boundary,
+        and are never regenerated per regime. Each model is also fit()
+        once here, not once per portfolio, since fit() depends only on the
+        model class and the shared market data.
+
+        Common random numbers: cell seeds and the per-chunk seed sequence
+        are drawn identically to backend="process" (see
+        MonteCarloEngine._chunk_sizes), so for the same config both
+        backends simulate bit-identical market paths for a given cell.
+        """
+        if self.raw_results is not None:
+            raise RuntimeError(
+                "CLI run can only be run once per instantiation")
+
+        self._load_config()
+        config = self.simulation_config
+        simulation_months = int(config.years * 12)
+
+        results = {
+            "initial_nav": config.initial_nav,
+            "years": config.years,
+            "total_paths": config.total_paths,
+            "simulations": {},
+            "perf_data": {}
+        }
+
+        perf_counters = {}
+        rng = np.random.default_rng(seed=config.master_seed)
+        levels, returns = self.mdm.get_aligned_real_returns()
+        total = config.total_portfolios()
+
+        for model_name in config.models:
+            if model_name not in self.model_map:
+                raise ValueError(f"Model {model_name} not supported")
+            results["simulations"][model_name] = []
+            perf_counters[model_name] = {
+                "setup": [], "simulation": [], "data_storage": []}
+
+        # fit() depends only on the model class and the shared market data
+        # -- never on a portfolio's allocation/spending/tax regime -- so,
+        # unlike backend="process", it only needs to run once per model.
+        fitted_simulators = {
+            model_name: self.model_map[model_name]()
+            for model_name in config.models
+        }
+        for sim in fitted_simulators.values():
+            sim.fit(returns, levels)
+
+        # Per-year tax bracket tables, flattened once per regime name and
+        # reused across every cell that uses it (see
+        # fast_ladder.flatten_tax_regime).
+        max_years = (simulation_months + 11) // 12 + 1
+        tax_regime_flat_cache: dict = {}
+
+        def flat_for(tax_regime_name):
+            if tax_regime_name not in tax_regime_flat_cache:
+                tax_regime_flat_cache[tax_regime_name] = (
+                    fast_ladder.flatten_tax_regime(
+                        build_tax_regime(tax_regime_name), max_years))
+            return tax_regime_flat_cache[tax_regime_name]
+
+        # Group portfolio_configs()'s output into cells -- tax_regime is
+        # deliberately its innermost loop (see MCConfig.portfolio_configs),
+        # so consecutive entries sharing (model, equity, spending) are
+        # exactly one cell's tax-regime variants.
+        cells: List[Tuple[Tuple, List[dict]]] = []
+        for p in config.portfolio_configs():
+            key = (p["model"], p["equity_allocation"], p["yearly_spending"])
+            if not cells or cells[-1][0] != key:
+                cells.append((key, []))
+            cells[-1][1].append(p)
+
+        # One pool for the whole run, every cell's chunks submitted up
+        # front (so workers never idle waiting on the slowest chunk of a
+        # cell or on serial setup), collected in cell order afterward.
+        pending = []
+        with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
+            for cell_idx, (cell_key, portfolios) in enumerate(cells):
+                model_name = cell_key[0]
+                logging.info(
+                    "Submitting cell #%d out of %d (%d tax-regime "
+                    "variant(s)). Progress: %.2f%%",
+                    cell_idx + 1, len(cells), len(portfolios),
+                    100.0 * sum(len(ps_) for _, ps_ in cells[:cell_idx + 1])
+                    / total)
+                logging.info(
+                    "Model: %s, Yearly Spending: $%.2f, Equity: %.2f%%",
+                    model_name, cell_key[2], cell_key[1] * 100.0)
+
+                setup_start = time.perf_counter()
+                cell_seed = int(rng.integers(1 << 32))
+                chunk_rng = np.random.default_rng(cell_seed)
+                chunks = MonteCarloEngine._chunk_sizes(
+                    config.total_paths, config.n_workers)
+
+                portfolio_params = [
+                    (p["equity_allocation"], p["ladder_allocation"],
+                     p["yearly_spending"], p.get("dividend_yield", 0.01),
+                     flat_for(p["tax_regime"]))
+                    for p in portfolios
+                ]
+
+                chunk_futures = [
+                    executor.submit(
+                        MonteCarloEngine._execute_cell_batch_fast,
+                        fitted_simulators[model_name], simulation_months,
+                        config.initial_nav, batch_size,
+                        int(chunk_rng.integers(1 << 31)), portfolio_params)
+                    for batch_size in chunks
+                ]
+                setup_end = time.perf_counter()
+                perf_counters[model_name]["setup"].append(
+                    setup_end - setup_start)
+                pending.append((cell_key, portfolios, chunk_futures))
+
+            for cell_key, portfolios, chunk_futures in pending:
+                model_name = cell_key[0]
+                sim_start = time.perf_counter()
+                # Submission order, not completion order -- same
+                # determinism rationale as collect() in backend="process".
+                chunk_results = [f.result() for f in chunk_futures]
+                sim_end = time.perf_counter()
+                perf_counters[model_name]["simulation"].append(
+                    sim_end - sim_start)
+
+                data_start = time.perf_counter()
+                final_spx = np.concatenate(
+                    [chunk[0] for chunk in chunk_results])
+                for idx, p in enumerate(portfolios):
+                    final_navs = np.concatenate(
+                        [chunk[1][idx][0] for chunk in chunk_results])
+                    ruin_months = np.concatenate(
+                        [chunk[1][idx][1] for chunk in chunk_results])
+                    ruin_histogram = np.zeros(simulation_months)
+                    ruined = ruin_months[ruin_months >= 0]
+                    if ruined.size > 0:
+                        counts = np.bincount(
+                            ruined, minlength=simulation_months)
+                        ruin_histogram = counts[
+                            :simulation_months].astype(float)
+
+                    results["simulations"][model_name].append({
+                        "spending": p["yearly_spending"],
+                        "equity": p["equity_allocation"],
+                        "ladder": p["ladder_allocation"],
+                        "tax_regime": p["tax_regime"],
+                        "ruin_histogram": ruin_histogram.tolist(),
+                        "results": {
+                            "Terminal SPX": final_spx.tolist(),
+                            "Terminal NAV": final_navs.tolist(),
+                        },
+                    })
                 data_end = time.perf_counter()
                 perf_counters[model_name]["data_storage"].append(
                     data_end - data_start)

@@ -23,7 +23,8 @@ from tax_models.regimes import build_tax_regime
 MONTHS = 756
 LARGE_PATHS = 50_000
 PROFILE_PATHS = 500
-MODELS = [ps.HybridValuationVARSimulator, ps.RegimeSwitchingValuationVARSimulator]
+MODELS: list[type[ps.PathSimulator]] = [
+    ps.HybridValuationVARSimulator, ps.RegimeSwitchingValuationVARSimulator]
 
 
 def make_market_levels(seed: int = 7) -> pd.DataFrame:
