@@ -181,20 +181,20 @@ def headline(f: decision.Frontier, ref_f: decision.Frontier,
 # status in color; the row tints are faint enough for normal text ink to
 # stay readable on both light and dark surfaces.
 PASS_COLOR, FAIL_COLOR = "#0ca30c", "#d03b3b"
-# Passing rows: one green, deeper the earlier the ranking step that
-# separated the row (an earlier step is a more decisive win); failing rows
-# red. Translucent tints, with stronger steps on the dark surface, where
-# faint ones vanish.
+# Passing rows: one green, deeper the more ranking steps the row stayed
+# level with the best on before the deciding one (ruin rate, then ES10
+# age, P10 return, P50 return); failing rows red. Translucent tints, with
+# stronger steps on the dark surface, where faint ones vanish.
 TINT_ALPHAS = {
-    False: {"ruin rate": 0.36, "ES10 age": 0.24, "P10 return": 0.14,
-            "P50 return": 0.06, "fail": 0.12},
-    True: {"ruin rate": 0.62, "ES10 age": 0.42, "P10 return": 0.26,
-           "P50 return": 0.13, "fail": 0.22},
+    False: {"ruin rate": 0.06, "ES10 age": 0.14, "P10 return": 0.24,
+            "P50 return": 0.36, "fail": 0.12},
+    True: {"ruin rate": 0.13, "ES10 age": 0.26, "P10 return": 0.42,
+           "P50 return": 0.62, "fail": 0.22},
 }
-LEGEND = [("ruin rate", "won on ruin rate"),
+LEGEND = [("ruin rate", "won on ruin rate, or last passing"),
           ("ES10 age", "won on ES10 age"),
           ("P10 return", "won on P10 return"),
-          ("P50 return", "won on P50 return, or last passing"),
+          ("P50 return", "won on P50 return"),
           ("fail", "fails the ruin ceiling")]
 
 
@@ -208,7 +208,7 @@ def row_tint(r: decision.Ranked) -> str:
     if not r.passes:
         return tint("fail")
     # The last passing row had no contest; it shares the faintest shade.
-    return tint("P50 return" if r.decided_by == "—" else r.decided_by)
+    return tint("ruin rate" if r.decided_by == "—" else r.decided_by)
 
 
 def legend():
@@ -223,8 +223,8 @@ def legend():
         unsafe_allow_html=True,
         help="Ranking steps run in order: ruin rate, ES10 age, P10 return, "
              "P50 return. A row's shade shows the step that put it ahead of "
-             "the rows below; every earlier step was a tie within "
-             "tolerance.")
+             "the rows below; it was level with the best on every earlier "
+             "step, so a deeper green means it held up on more criteria.")
 
 
 def ranked_table(level_cells, ref_by_key, crit, review):

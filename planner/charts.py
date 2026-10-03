@@ -147,9 +147,10 @@ def survival_curves(curves: Sequence[tuple], retirement_age: float,
 def ruin_age_histogram(cell: decision.Cell, retirement_age: float,
                        color: str, theme: Theme) -> go.Figure:
     """
-    Ruined paths per year of age, from the first year with a ruined path
-    to the last: the ruin-free years before (usually most of the horizon)
-    would only squash the interesting part against one edge.
+    Share of the ruined paths that are ruined in each year of age, from
+    the first year with a ruined path to the last: the ruin-free years
+    before (usually most of the horizon) would only squash the interesting
+    part against one edge.
     """
     hist = cell.ruin_histogram
     years = (len(hist) + 11) // 12
@@ -159,13 +160,16 @@ def ruin_age_histogram(cell: decision.Cell, retirement_age: float,
     if nonzero:
         first, last = nonzero[0], nonzero[-1] + 1
         counts, ages = counts[first:last], ages[first:last]
+    total = sum(counts) or 1
     fig = go.Figure(go.Bar(
-        x=ages, y=counts, marker=dict(color=color, cornerradius=4),
-        hovertemplate="Age %{x}: %{y:,} paths<extra></extra>"))
+        x=ages, y=[n / total for n in counts], customdata=counts,
+        marker=dict(color=color, cornerradius=4),
+        hovertemplate=("Age %{x}: %{y:.1%} of ruined paths "
+                       "(%{customdata:,})<extra></extra>")))
     _base_layout(fig, theme, height=300)
     fig.update_layout(bargap=0.15, hovermode="closest")
     fig.update_xaxes(title_text="Age at ruin")
-    fig.update_yaxes(title_text="Ruined paths", tickformat=",d")
+    fig.update_yaxes(title_text="Share of ruined paths", tickformat=".0%")
     return fig
 
 

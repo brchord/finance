@@ -24,7 +24,9 @@ def test_ruin_histogram_skips_ruin_free_years():
     # Leading/trailing ruin-free years dropped; the gap year is kept so the
     # age axis stays continuous.
     assert list(bar.x) == [62, 63, 64]
-    assert list(bar.y) == [3, 0, 1]
+    # Shares of all ruined paths; counts kept for the hover.
+    assert list(bar.y) == [0.75, 0.0, 0.25]
+    assert list(bar.customdata) == [3, 0, 1]
 
 
 def test_equity_color_spans_the_given_range():
