@@ -181,8 +181,50 @@ def headline(f: decision.Frontier, ref_f: decision.Frontier,
 # status in color; the row tints are faint enough for normal text ink to
 # stay readable on both light and dark surfaces.
 PASS_COLOR, FAIL_COLOR = "#0ca30c", "#d03b3b"
-PASS_TINT = "background-color: rgba(12, 163, 12, 0.10)"
-FAIL_TINT = "background-color: rgba(208, 59, 59, 0.10)"
+# Passing rows: one green, deeper the earlier the ranking step that
+# separated the row (an earlier step is a more decisive win); failing rows
+# red. Translucent tints, with stronger steps on the dark surface, where
+# faint ones vanish.
+TINT_ALPHAS = {
+    False: {"ruin rate": 0.36, "ES10 age": 0.24, "P10 return": 0.14,
+            "P50 return": 0.06, "fail": 0.12},
+    True: {"ruin rate": 0.62, "ES10 age": 0.42, "P10 return": 0.26,
+           "P50 return": 0.13, "fail": 0.22},
+}
+LEGEND = [("ruin rate", "won on ruin rate"),
+          ("ES10 age", "won on ES10 age"),
+          ("P10 return", "won on P10 return"),
+          ("P50 return", "won on P50 return, or last passing"),
+          ("fail", "fails the ruin ceiling")]
+
+
+def tint(step: str) -> str:
+    alpha = TINT_ALPHAS[ui.theme() is charts.DARK][step]
+    rgb = "208, 59, 59" if step == "fail" else "12, 163, 12"
+    return f"rgba({rgb}, {alpha})"
+
+
+def row_tint(r: decision.Ranked) -> str:
+    if not r.passes:
+        return tint("fail")
+    # The last passing row had no contest; it shares the faintest shade.
+    return tint("P50 return" if r.decided_by == "—" else r.decided_by)
+
+
+def legend():
+    swatches = " ".join(
+        f'<span style="display:inline-flex;align-items:center;gap:6px;'
+        f'margin-right:18px"><span style="width:14px;height:14px;'
+        f'border-radius:3px;background:{tint(step)};border:1px solid '
+        f'rgba(128,128,128,0.35)"></span>{label}</span>'
+        for step, label in LEGEND)
+    st.markdown(
+        f'<div style="font-size:0.85rem;line-height:2">{swatches}</div>',
+        unsafe_allow_html=True,
+        help="Ranking steps run in order: ruin rate, ES10 age, P10 return, "
+             "P50 return. A row's shade shows the step that put it ahead of "
+             "the rows below; every earlier step was a tie within "
+             "tolerance.")
 
 
 def ranked_table(level_cells, ref_by_key, crit, review):
@@ -205,13 +247,11 @@ def ranked_table(level_cells, ref_by_key, crit, review):
             "P25 return": c.p25_return * 100,
             "P50 return": c.p50_return * 100,
             "Ref. P(ruin)": ref.ruin_rate * 100 if ref else None,
-            "Decided by": r.decided_by,
         })
     df = pd.DataFrame(rows)
-    passes = [r.passes for r in ranked]
+    tints = [f"background-color: {row_tint(r)}" for r in ranked]
     styled = (df.style
-              .apply(lambda row: [PASS_TINT if passes[row.name]
-                                  else FAIL_TINT] * len(row), axis=1)
+              .apply(lambda row: [tints[row.name]] * len(row), axis=1)
               .map(lambda v: f"color: {PASS_COLOR if v == '✓' else FAIL_COLOR};"
                              " font-weight: bold", subset=["Passes"]))
     event = st.dataframe(
@@ -239,12 +279,8 @@ def ranked_table(level_cells, ref_by_key, crit, review):
             "P10 return": st.column_config.NumberColumn(format="%+.0f%%"),
             "P25 return": st.column_config.NumberColumn(format="%+.0f%%"),
             "P50 return": st.column_config.NumberColumn(format="%+.0f%%"),
-            "Decided by": st.column_config.TextColumn(
-                help="The ranking step that put this allocation ahead of "
-                     "the ones below it. Steps run in order: ruin rate, "
-                     "ES10 age, P10 return, P50 return; every step before "
-                     "the deciding one was a tie within tolerance."),
         })
+    legend()
     selected = event.selection.rows
     return ranked[selected[0]].cell if selected else None
 
