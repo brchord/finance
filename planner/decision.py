@@ -149,6 +149,10 @@ class Ranked:
     rank: int            # 1-based
     passes: bool
     reason: str
+    # The ranking step that separated this cell from the rest ("ruin
+    # rate", "ES10 age", "P10 return" or "P50 return"); every earlier step
+    # was a tie. "—" for the last passing cell, "ceiling" for failing ones.
+    decided_by: str
 
 
 def _es10_years(cell: Cell) -> float:
@@ -159,12 +163,13 @@ def _es10_years(cell: Cell) -> float:
 
 
 def _select_best(candidates: List[Cell],
-                 criteria: Criteria) -> Tuple[Cell, str]:
+                 criteria: Criteria) -> Tuple[Cell, str, str]:
     """
     Anchored lexicographic selection: at each step keep only the
     candidates within tolerance of the best value among those remaining.
     The first step that leaves a single candidate decides; if none does,
-    the highest P50 return wins. Returns the winner and an explanation.
+    the highest P50 return wins. Returns the winner, an explanation and
+    the deciding step's name.
     """
     steps = [
         ("ruin rate",
@@ -186,10 +191,10 @@ def _select_best(candidates: List[Cell],
         candidates = [c for c in candidates
                       if value(c) >= cutoff or value(c) == best]
         if len(candidates) == 1:
-            return candidates[0], _explain(tied_on, name)
+            return candidates[0], _explain(tied_on, name), name
         tied_on.append(name)
     return (max(candidates, key=lambda c: c.p50_return),
-            _explain(tied_on, "P50 return"))
+            _explain(tied_on, "P50 return"), "P50 return")
 
 
 def _explain(tied_on: List[str], decided_by: str) -> str:
@@ -210,14 +215,16 @@ def rank(cells: Sequence[Cell], criteria: Criteria) -> List[Ranked]:
     ranked: List[Ranked] = []
     while passing:
         if len(passing) == 1:
-            winner, reason = passing[0], "last passing cell"
+            winner, reason, decided_by = (
+                passing[0], "last passing cell", "—")
         else:
-            winner, reason = _select_best(passing, criteria)
-        ranked.append(Ranked(winner, len(ranked) + 1, True, reason))
+            winner, reason, decided_by = _select_best(passing, criteria)
+        ranked.append(Ranked(winner, len(ranked) + 1, True, reason,
+                             decided_by))
         passing.remove(winner)
     for cell in failing:
         ranked.append(Ranked(cell, len(ranked) + 1, False,
-                             "ruin rate above ceiling"))
+                             "ruin rate above ceiling", "ceiling"))
     return ranked
 
 

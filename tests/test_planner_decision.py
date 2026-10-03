@@ -108,6 +108,7 @@ class TestRank:
         top = self.ranked(risky, safe)[0]
         assert top.cell is safe
         assert top.reason == "won on ruin rate"
+        assert top.decided_by == "ruin rate"
 
     def test_es10_decides_within_ruin_tolerance(self):
         a = cell(equity=0.5, ruin=200, es10=70 * 12)
@@ -129,6 +130,7 @@ class TestRank:
         assert top.cell is b
         assert top.reason == (
             "tied on ruin rate, ES10 age, P10 return; won on P50 return")
+        assert top.decided_by == "P50 return"
 
         c = cell(equity=0.7, ruin=200, es10=70 * 12, p10=2.0, p50=1.0)
         top = self.ranked(a, b, c)[0]
@@ -158,6 +160,7 @@ class TestRank:
         assert [r.cell for r in ranked] == [good, bad, worse]
         assert [r.passes for r in ranked] == [True, False, False]
         assert [r.rank for r in ranked] == [1, 2, 3]
+        assert [r.decided_by for r in ranked] == ["—", "ceiling", "ceiling"]
 
 
 def grid(ruin_by_spending, equities=(0.5, 0.6), paths=10_000):

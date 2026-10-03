@@ -177,6 +177,14 @@ def headline(f: decision.Frontier, ref_f: decision.Frontier,
                 icon="ℹ️")
 
 
+# Status palette (dataviz reference): good / critical. The marks carry the
+# status in color; the row tints are faint enough for normal text ink to
+# stay readable on both light and dark surfaces.
+PASS_COLOR, FAIL_COLOR = "#0ca30c", "#d03b3b"
+PASS_TINT = "background-color: rgba(12, 163, 12, 0.10)"
+FAIL_TINT = "background-color: rgba(208, 59, 59, 0.10)"
+
+
 def ranked_table(level_cells, ref_by_key, crit, review):
     ret_age = review.profile.retirement_age
     ranked = decision.rank(level_cells, crit)
@@ -189,27 +197,53 @@ def ranked_table(level_cells, ref_by_key, crit, review):
             "Allocation": c.allocation,
             "Passes": "✓" if r.passes else "✗",
             "P(ruin)": c.ruin_rate * 100,
-            "Ruined paths": c.ruin_count,
+            # Half-width of the 95% confidence interval of P(ruin).
+            "±95%": 1.96 * c.ruin_rate_se * 100,
+            "Paths": c.total_paths,
             "ES10 age": decision.month_to_age(c.ruin_month_es10, ret_age),
             "P10 return": c.p10_return * 100,
+            "P25 return": c.p25_return * 100,
             "P50 return": c.p50_return * 100,
             "Ref. P(ruin)": ref.ruin_rate * 100 if ref else None,
-            "Why": r.reason,
+            "Decided by": r.decided_by,
         })
+    df = pd.DataFrame(rows)
+    passes = [r.passes for r in ranked]
+    styled = (df.style
+              .apply(lambda row: [PASS_TINT if passes[row.name]
+                                  else FAIL_TINT] * len(row), axis=1)
+              .map(lambda v: f"color: {PASS_COLOR if v == '✓' else FAIL_COLOR};"
+                             " font-weight: bold", subset=["Passes"]))
     event = st.dataframe(
-        pd.DataFrame(rows), hide_index=True, width="stretch",
+        styled, hide_index=True, width="stretch",
         on_select="rerun", selection_mode="single-row", key="rank_table",
         column_config={
+            "Rank": st.column_config.NumberColumn(width="small"),
+            "Passes": st.column_config.TextColumn(width="small"),
             "P(ruin)": st.column_config.NumberColumn(format="%.2f%%"),
+            "±95%": st.column_config.NumberColumn(
+                format="±%.2f%%",
+                help="95% confidence interval of P(ruin), from the number "
+                     "of paths: the true ruin rate is likely within this "
+                     "margin of the estimate."),
+            "Paths": st.column_config.NumberColumn(
+                format="localized",
+                help="Paths simulated for this cell. Cells merged from "
+                     "different runs can differ."),
             "Ref. P(ruin)": st.column_config.NumberColumn(
                 format="%.2f%%", help=ui.reference_model()),
-            "Ruined paths": st.column_config.NumberColumn(format="%d"),
             "ES10 age": st.column_config.NumberColumn(
                 format="%.1f",
                 help="Mean age at ruin of the earliest 10% of ruined paths."
                      " Empty when no path is ruined."),
             "P10 return": st.column_config.NumberColumn(format="%+.0f%%"),
+            "P25 return": st.column_config.NumberColumn(format="%+.0f%%"),
             "P50 return": st.column_config.NumberColumn(format="%+.0f%%"),
+            "Decided by": st.column_config.TextColumn(
+                help="The ranking step that put this allocation ahead of "
+                     "the ones below it. Steps run in order: ruin rate, "
+                     "ES10 age, P10 return, P50 return; every step before "
+                     "the deciding one was a tie within tolerance."),
         })
     selected = event.selection.rows
     return ranked[selected[0]].cell if selected else None

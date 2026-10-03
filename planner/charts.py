@@ -146,11 +146,19 @@ def survival_curves(curves: Sequence[tuple], retirement_age: float,
 
 def ruin_age_histogram(cell: decision.Cell, retirement_age: float,
                        color: str, theme: Theme) -> go.Figure:
-    "Ruined paths per year of age."
+    """
+    Ruined paths per year of age, from the first year with a ruined path
+    to the last: the ruin-free years before (usually most of the horizon)
+    would only squash the interesting part against one edge.
+    """
     hist = cell.ruin_histogram
     years = (len(hist) + 11) // 12
     counts = [sum(hist[y * 12:(y + 1) * 12]) for y in range(years)]
     ages = [retirement_age + y for y in range(years)]
+    nonzero = [y for y, n in enumerate(counts) if n > 0]
+    if nonzero:
+        first, last = nonzero[0], nonzero[-1] + 1
+        counts, ages = counts[first:last], ages[first:last]
     fig = go.Figure(go.Bar(
         x=ages, y=counts, marker=dict(color=color, cornerradius=4),
         hovertemplate="Age %{x}: %{y:,} paths<extra></extra>"))
