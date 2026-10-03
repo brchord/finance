@@ -1,8 +1,7 @@
 """
 Parity tests for portfolio_models/fast_ladder.py against the reference
 LongSPYWithTreasuryLadders.run_simulation. A failure here must always mean
-a porting mistake in fast_ladder.py, never an intentional behavior change
--- see doc/plans/GPU Optimization Plan.md, Stage 1.
+a porting mistake in fast_ladder.py, never an intentional behavior change.
 
 Comparisons are exact (assert_array_equal), not approximate: a last-digit
 difference in the operator can flip a share-count or rebalancing
@@ -17,7 +16,7 @@ import pytest
 import market_modelling.path_simulation as ps
 from portfolio_models.fast_ladder import (
     _pandas_rolling_mean, _python_sum, flatten_tax_regime,
-    run_simulation_fast, run_simulation_fast_batch)
+    annual_snapshot_months, run_simulation_fast, run_simulation_fast_batch)
 from portfolio_models.linear_models import LongSPYWithTreasuryLadders as LSTL
 from tax_models.regimes import build_tax_regime
 
@@ -165,9 +164,10 @@ class TestFastLadderBatch:
         max_years = (months + 11) // 12 + 1
         flat = flatten_tax_regime(tax_regime, max_years)
 
-        batch_navs, batch_ruins = run_simulation_fast_batch(
+        batch_navs, batch_ruins, annual = run_simulation_fast_batch(
             spx_paths, cpi_paths, tbill_paths, tnote_paths,
             1_000_000.0, months, 0.6, 0.4, 60_000.0, 0.01, *flat)
+        assert annual.shape == (25, 11)
 
         for i in range(25):
             nav_path, ruin_month = run_simulation_fast(
@@ -175,6 +175,15 @@ class TestFastLadderBatch:
                 1_000_000.0, months, 0.6, 0.4, 60_000.0, 0.01, *flat)
             assert batch_ruins[i] == ruin_month
             assert batch_navs[i] == nav_path[-1]
+            assert annual[i, 0] == 1_000_000.0
+            assert list(annual[i, 1:]) == [
+                nav_path[12 * y - 1] for y in range(1, 11)]
+            assert annual[i, -1] == nav_path[-1]
+
+    @pytest.mark.parametrize("months,expected", [
+        (24, [11, 23]), (30, [11, 23]), (11, []), (12, [11])])
+    def test_annual_snapshot_months(self, months, expected):
+        assert list(annual_snapshot_months(months)) == expected
 
 
 class TestFlattenTaxRegime:

@@ -1,7 +1,7 @@
 """
-Stage 1 benchmark: portfolio_models.fast_ladder vs. the reference
-LongSPYWithTreasuryLadders.run_simulation, at the large-run shape described
-in doc/plans/GPU Optimization Plan.md (50,000 paths, 756 months).
+Benchmark: portfolio_models.fast_ladder vs. the reference
+LongSPYWithTreasuryLadders.run_simulation, at a large real-world run shape
+(50,000 paths, 756 months).
 
 Not a test -- run manually:
     python benchmarks/bench_fast_ladder.py

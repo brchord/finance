@@ -12,9 +12,11 @@ import json
 import logging
 import os
 import time
+import traceback
 
 from concurrent.futures import Future, ProcessPoolExecutor
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -22,6 +24,7 @@ import pandas as pd
 import market_modelling.path_simulation as ps
 import portfolio_models.fast_ladder as fast_ladder
 import portfolio_models.linear_models as lm
+import job_files
 
 from market_data.yf_fred_market_data import MarketDataManager
 from market_modelling.fast_hybrid_path_simulation import (
@@ -71,6 +74,24 @@ def _generate_paths_fast(
         simulation_months=simulation_months, num_paths=num_paths, seed=seed)
 
 
+NAV_BAND_PERCENTILES = (5, 10, 25, 50)
+
+
+def nav_bands(annual_navs: np.ndarray) -> dict:
+    """
+    Per-year NAV percentiles across paths, from annual_navs of shape
+    (num_paths, years + 1) (see fast_ladder.annual_snapshot_months):
+    {"years": [0, 1, ...], "p5": [...], "p10": [...], ...}, year 0 being
+    the initial NAV. Ruined paths count with a NAV of 0. Only the median
+    and below are kept (doc/plans/UI Design.md, "Downside first").
+    """
+    q = np.percentile(annual_navs, NAV_BAND_PERCENTILES, axis=0)
+    bands: dict = {"years": list(range(annual_navs.shape[1]))}
+    for p, values in zip(NAV_BAND_PERCENTILES, q):
+        bands[f"p{p}"] = values.tolist()
+    return bands
+
+
 class MonteCarloEngine:
     """
     Orchestrates parallel Monte Carlo simulations for any InvestmentStrategy
@@ -116,7 +137,7 @@ class MonteCarloEngine:
         initial_nav: float,
         num_paths: int,
         seed: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Static worker method executing a batch of paths inside an isolated
         process.
@@ -130,10 +151,16 @@ class MonteCarloEngine:
             3. ruin_histogram (np.ndarray): For ruin paths, the histogram of
                                             the month where ruin occurred
                                             (num_paths).
+            4. annual_navs (np.ndarray): NAV at the start and at each
+               year-end (num_paths, years + 1); see
+               fast_ladder.annual_snapshot_months.
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
         ruin_histogram = np.zeros(simulation_months)
+        snapshot_months = fast_ladder.annual_snapshot_months(
+            simulation_months)
+        annual_navs = np.empty((num_paths, snapshot_months.shape[0] + 1))
 
         # Generate batch real wealth index paths via simulator interface
         paths = path_simulator.simulate_paths(
@@ -160,11 +187,13 @@ class MonteCarloEngine:
 
             final_spx[i] = spx_paths[i, -1]
             final_navs[i] = nav_paths[-1]
+            annual_navs[i, 0] = initial_nav
+            annual_navs[i, 1:] = np.asarray(nav_paths)[snapshot_months]
             if nav_paths[-1] == 0.0:
                 ruin_month = np.argmax(nav_paths == 0.0)
                 ruin_histogram[ruin_month] += 1
 
-        return final_spx, final_navs, ruin_histogram
+        return final_spx, final_navs, ruin_histogram, annual_navs
 
     @staticmethod
     def _chunk_sizes(total_paths: int, n_workers: int) -> List[int]:
@@ -201,7 +230,7 @@ class MonteCarloEngine:
         num_paths: int,
         seed: int,
         portfolio_params: List[Tuple[float, float, float, float, tuple]],
-    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]:
+    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray, np.ndarray]]]:
         """
         Worker for backend="numba" (MonteCarloCLI._run_numba): generates
         one chunk of a CELL's market paths once, inside this worker
@@ -214,7 +243,8 @@ class MonteCarloEngine:
         _execute_strategy_batch: paths are generated once per cell instead
         of once per tax-regime variant, and the (potentially ~GB-scale)
         path arrays never leave this process -- only the much smaller
-        final_navs/ruin_months arrays are pickled back to the parent.
+        final_navs/ruin_months/annual_navs arrays are pickled back to the
+        parent.
 
         Runs single-threaded (numba.set_num_threads(1)): this function
         itself is already run in parallel by a ProcessPoolExecutor across
@@ -231,10 +261,9 @@ class MonteCarloEngine:
 
         per_portfolio = []
         for equity, ladder, spending, div, flat in portfolio_params:
-            final_navs, ruin_months = fast_ladder.run_simulation_fast_batch(
+            per_portfolio.append(fast_ladder.run_simulation_fast_batch(
                 spx, cpi, tbill, tnote, initial_nav, simulation_months,
-                equity, ladder, spending, div, *flat)
-            per_portfolio.append((final_navs, ruin_months))
+                equity, ladder, spending, div, *flat))
 
         return final_spx, per_portfolio
 
@@ -270,17 +299,18 @@ class MonteCarloEngine:
     def collect(
         self,
         futures: List[Future],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Blocks until the futures returned by submit() are done and assembles
         their results.
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
         """
         all_final_spx = []
         all_final_navs = []
+        all_annual_navs = []
         full_ruin_histogram = np.zeros(self.simulation_months)
 
         # Iterate futures in their original submission order rather than
@@ -289,15 +319,17 @@ class MonteCarloEngine:
         # silently permuted which array position each simulated path landed
         # in from run to run.
         for future in futures:
-            f_spx, f_navs, f_ruin_histograms = future.result()
+            f_spx, f_navs, f_ruin_histograms, f_annual = future.result()
             all_final_spx.append(f_spx)
             all_final_navs.append(f_navs)
+            all_annual_navs.append(f_annual)
             full_ruin_histogram += f_ruin_histograms
 
         return (
             np.concatenate(all_final_spx),
             np.concatenate(all_final_navs),
-            full_ruin_histogram
+            full_ruin_histogram,
+            np.concatenate(all_annual_navs),
         )
 
     def run(
@@ -305,7 +337,7 @@ class MonteCarloEngine:
         *,
         total_paths: int,
         n_workers: int
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Convenience wrapper: runs this engine alone on its own process pool.
 
@@ -318,7 +350,7 @@ class MonteCarloEngine:
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
         """
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = self.submit(
@@ -341,8 +373,16 @@ class MonteCarloCLI:
 
     def __init__(self,
                  input_config_file: str,
-                 market_data_file: str):
+                 market_data_file: str,
+                 progress_callback: Optional[
+                     Callable[[int, int], None]] = None):
+        """
+        progress_callback, if given, is called as progress_callback(done,
+        total) each time another portfolio's results have been collected
+        (total is MCConfig.total_portfolios()).
+        """
         self.input_file = input_config_file
+        self.progress_callback = progress_callback
         self.mdm = MarketDataManager(cache_filepath=market_data_file)
         self.model_map = {m.name(): m for m in self.SUPPORTED_MODELS}
         self.simulation_config = None
@@ -500,8 +540,7 @@ class MonteCarloCLI:
                 was generated with, and the default so existing callers and
                 the golden snapshot are unaffected.
             "numba": executes the portfolio operator via
-                fast_ladder.run_simulation_fast_batch (see
-                doc/plans/GPU Optimization Plan.md, Stage 1/2) instead of a
+                fast_ladder.run_simulation_fast_batch instead of a
                 process pool running the scalar run_simulation per path.
                 Also fits each path simulator once per model instead of
                 once per portfolio, and generates each cell's market paths
@@ -573,6 +612,7 @@ class MonteCarloCLI:
         # of a portfolio or on serial setup. Results are collected in
         # portfolio order, so output is identical to running them one by one.
         pending = []
+        done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for p in portfolios:
                 model_name = p["model"]
@@ -613,7 +653,7 @@ class MonteCarloCLI:
                 # Time spent blocked waiting on this portfolio's results;
                 # simulation itself overlaps with other portfolios' setup.
                 sim_start = time.perf_counter()
-                spx, nav, ruin_histogram = mc.collect(futures)
+                spx, nav, ruin_histogram, annual_navs = mc.collect(futures)
                 sim_end = time.perf_counter()
 
                 perf_counters[model_name]["simulation"].append(
@@ -630,14 +670,21 @@ class MonteCarloCLI:
                     "ladder": p["ladder_allocation"],
                     "tax_regime": p["tax_regime"],
                     "ruin_histogram": ruin_histogram.tolist(),
+                    "nav_bands": nav_bands(annual_navs),
                     "results": run_output
                 })
                 data_end = time.perf_counter()
                 perf_counters[model_name]["data_storage"].append(
                     data_end - data_start)
+                done += 1
+                self._report_progress(done, total)
 
         results["perf_data"] = perf_counters
         self.raw_results = results
+
+    def _report_progress(self, done: int, total: int):
+        if self.progress_callback is not None:
+            self.progress_callback(done, total)
 
     def _run_numba(self):
         """
@@ -737,6 +784,7 @@ class MonteCarloCLI:
         # front (so workers never idle waiting on the slowest chunk of a
         # cell or on serial setup), collected in cell order afterward.
         pending = []
+        done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for cell_idx, (cell_key, portfolios) in enumerate(cells):
                 model_name = cell_key[0]
@@ -794,6 +842,8 @@ class MonteCarloCLI:
                         [chunk[1][idx][0] for chunk in chunk_results])
                     ruin_months = np.concatenate(
                         [chunk[1][idx][1] for chunk in chunk_results])
+                    annual_navs = np.concatenate(
+                        [chunk[1][idx][2] for chunk in chunk_results])
                     ruin_histogram = np.zeros(simulation_months)
                     ruined = ruin_months[ruin_months >= 0]
                     if ruined.size > 0:
@@ -808,6 +858,7 @@ class MonteCarloCLI:
                         "ladder": p["ladder_allocation"],
                         "tax_regime": p["tax_regime"],
                         "ruin_histogram": ruin_histogram.tolist(),
+                        "nav_bands": nav_bands(annual_navs),
                         "results": {
                             "Terminal SPX": final_spx.tolist(),
                             "Terminal NAV": final_navs.tolist(),
@@ -816,6 +867,8 @@ class MonteCarloCLI:
                 data_end = time.perf_counter()
                 perf_counters[model_name]["data_storage"].append(
                     data_end - data_start)
+                done += len(portfolios)
+                self._report_progress(done, total)
 
         results["perf_data"] = perf_counters
         self.raw_results = results
@@ -885,6 +938,7 @@ class MonteCarloCLI:
                 entry = {}
                 entry["spending"] = yearly_spending
                 entry["allocation"] = allocation_str
+                entry["equity"] = sim["equity"]
                 entry["tax_regime"] = sim["tax_regime"]
 
                 entry["ruin_path_count"] = ruin
@@ -901,6 +955,14 @@ class MonteCarloCLI:
 
                 entry["p25_return"] = df_data["Returns"].quantile(0.25)
                 entry["p50_return"] = df_data["Returns"].quantile(0.5)
+                # Monthly ruin counts (month index since retirement), for
+                # survival curves: P(solvent after month m) =
+                # 1 - cumsum(ruin_histogram)[m] / total_paths.
+                entry["ruin_histogram"] = [
+                    int(v) for v in sim["ruin_histogram"]]
+                # Per-year NAV percentiles (see nav_bands()); None for raw
+                # results produced before they existed.
+                entry["nav_bands"] = sim.get("nav_bands")
                 run_stats["results"][m].append(entry)
         self.agg_results = run_stats
 
@@ -910,24 +972,34 @@ def parse_args():
     prog_description = """CLI tool that invokes MC simulation across all
     portfolio models using the Long Equity and Fixed Income Ladders strategy.
 
-    Returns a CSV file with all the simulation results.
+    Writes the raw and aggregated simulation results as JSON files.
     """
     parser = argparse.ArgumentParser(description=prog_description)
     parser.add_argument("-c", "--config-file",
                         help="Config file in JSON format that contains the "
-                             "simulation parameters",
-                        dest="config_filename",
-                        required=True)
+                             "simulation parameters. Required unless "
+                             "--job-dir is given",
+                        dest="config_filename")
     parser.add_argument("-r", "--raw-output-file",
                         help="Destination JSON file to store the raw results "
-                             "of the simulation",
-                        dest="raw_output_filename",
-                        required=True)
+                             "of the simulation. Required unless --job-dir "
+                             "is given, in which case the raw results are "
+                             "only written if this is given too",
+                        dest="raw_output_filename")
     parser.add_argument("-o", "--aggregated-output-file",
                         help="Destination JSON file to store aggregated "
-                             "results of the simulation",
-                        dest="agg_output_filename",
-                        required=True)
+                             "results of the simulation. Required unless "
+                             "--job-dir is given",
+                        dest="agg_output_filename")
+    parser.add_argument("-j", "--job-dir",
+                        help="Job folder, as used by the UI: reads "
+                             f"{job_files.CONFIG_FILE} from it and writes "
+                             f"{job_files.STATUS_FILE} (progress), "
+                             f"{job_files.META_FILE} and "
+                             f"{job_files.RESULTS_FILE} (aggregated results) "
+                             "into it. -c and -o override the config and "
+                             "results paths",
+                        dest="job_dir")
     parser.add_argument("-m", "--market-cache-file",
                         help="Specifies an alternative parquet market data "
                              "cache file",
@@ -944,7 +1016,48 @@ def parse_args():
                         choices=["process", "numba"],
                         default="process",
                         dest="backend")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.job_dir is not None:
+        job_dir = Path(args.job_dir)
+        if args.config_filename is None:
+            args.config_filename = str(job_dir / job_files.CONFIG_FILE)
+        if args.agg_output_filename is None:
+            args.agg_output_filename = str(job_dir / job_files.RESULTS_FILE)
+    else:
+        missing = [flag for flag, value in (
+            ("-c/--config-file", args.config_filename),
+            ("-r/--raw-output-file", args.raw_output_filename),
+            ("-o/--aggregated-output-file", args.agg_output_filename))
+            if value is None]
+        if missing:
+            parser.error("the following arguments are required unless "
+                         f"--job-dir is given: {', '.join(missing)}")
+    return args
+
+
+def _write_meta(job_dir: Path, args):
+    "Records what is needed to reproduce a job: seed, code version, backend."
+    with open(args.config_filename, encoding="utf-8") as f:
+        config = json.load(f)
+    job_files.write_json_atomic(job_dir / job_files.META_FILE, {
+        "started_at": job_files.now_iso(),
+        "master_seed": config.get("master_seed"),
+        "engine_commit": job_files.git_commit(Path(__file__).parent),
+        "backend": args.backend,
+        "market_cache_file": args.market_data_filename,
+    })
+
+
+def _run_and_save(cli: MonteCarloCLI, args):
+    cli.run(backend=args.backend)
+    if args.raw_output_filename is not None:
+        with open(args.raw_output_filename, "w", encoding="utf-8") as f:
+            json.dump(cli.raw_results, f, indent=4)
+
+    cli.aggregate()
+    job_files.write_json_atomic(
+        Path(args.agg_output_filename), cli.agg_results, indent=4)
 
 
 def main():
@@ -954,14 +1067,24 @@ def main():
                "%(lineno)d:%(levelname)s: %(message)s",
         level=logging.INFO)
     args = parse_args()
-    cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
-    cli.run(backend=args.backend)
-    with open(args.raw_output_filename, "w", encoding="utf-8") as f:
-        json.dump(cli.raw_results, f, indent=4)
 
-    cli.aggregate()
-    with open(args.agg_output_filename, "w", encoding="utf-8") as f:
-        json.dump(cli.agg_results, f, indent=4)
+    if args.job_dir is None:
+        cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
+        _run_and_save(cli, args)
+        return
+
+    job_dir = Path(args.job_dir)
+    status = job_files.StatusWriter(job_dir, pid=os.getpid())
+    try:
+        _write_meta(job_dir, args)
+        cli = MonteCarloCLI(args.config_filename, args.market_data_filename,
+                            progress_callback=status.progress)
+        _run_and_save(cli, args)
+    except BaseException as exc:
+        status.failed(
+            "".join(traceback.format_exception_only(exc)).strip())
+        raise
+    status.succeeded()
 
 
 if __name__ == '__main__':

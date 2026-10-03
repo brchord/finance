@@ -6,9 +6,8 @@ recurrence (market_modelling/path_simulation.py). That recurrence is
 sequential over the 756-step time axis (each step depends on the previous
 one's state), so it is NOT fixable by the same across-paths vectorization
 used for the bootstrap block assembly -- see path_simulation.py's own
-comment on the fancy-indexed gather, and doc/plans/GPU Optimization
-Plan.md's note that "both models are sequential in time; parallelism
-exists only across paths". Profiling showed this loop, not the bootstrap
+comment on the fancy-indexed gather: both models are sequential in time,
+and parallelism exists only across paths. Profiling showed this loop, not the bootstrap
 assembly, is HybridValuationVARSimulator's actual dominant path-generation
 cost: per-step Python/numpy dispatch overhead across 756 iterations, not
 the arithmetic itself.
@@ -20,7 +19,7 @@ this port to it.
 
 The RNG draws and bootstrap block assembly (random_block_starts,
 bootstrapped_residuals) are duplicated here rather than shared with the
-reference, matching Stage 1's precedent (portfolio_models/fast_ladder.py)
+reference, matching the precedent of portfolio_models/fast_ladder.py
 of keeping the reference class untouched; the duplication is pinned by
 parity tests that compare the final path arrays, not just the
 intermediate residuals.

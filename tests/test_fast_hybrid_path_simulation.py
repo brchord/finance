@@ -1,8 +1,7 @@
 """
 Parity tests for market_modelling/fast_hybrid_path_simulation.py against
 the reference HybridValuationVARSimulator.simulate_paths. A failure here
-must always mean a porting mistake, never an intentional behavior change
--- see doc/plans/GPU Optimization Plan.md.
+must always mean a porting mistake, never an intentional behavior change.
 
 Unlike the other fast ports, this one is NOT bit-identical, so these
 tests use a tolerance. The reference computes each VAR step as one BLAS
