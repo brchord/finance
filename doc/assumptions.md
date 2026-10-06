@@ -52,9 +52,10 @@ where to sit on that range should be made deliberately.
 ## Metrics for the selection
 
 - `ruin_prob_by_age`: unconditional P(ruin before age) over **all**
-  paths. Prefer it to `ruin_month_median`, which is computed over ruined
-  paths only and can rank a rarely-ruining portfolio below an
-  often-ruining one whose ruins happen later.
+  paths. Statistics over ruined paths only (the median or earliest ruin
+  age, expected shortfalls of ruin age) can rank a rarely-ruining
+  portfolio below an often-ruining one whose ruins happen later, so the
+  CLI no longer reports them; derive timing from `ruin_histogram`.
 - `p*_return` are **nominal** (terminal NAV in future dollars);
   `p*_real_return` and `real_nav_bands` deflate each path by its own
   simulated price level (`monte_carlo.price_levels`), i.e. today's

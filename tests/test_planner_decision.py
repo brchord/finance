@@ -23,7 +23,6 @@ def cell(spending=100_000.0, equity=0.6, ruin=0, paths=10_000,
     return d.Cell(
         model=model, spending=spending, equity=equity,
         tax_regime=d.DEFAULT_TAX_REGIME, total_paths=paths, ruin_count=ruin,
-        ruin_month_min=None,
         p5_return=0.0, p10_return=p10, p25_return=0.0, p50_return=p50,
         ruin_histogram=tuple(histogram), run_id=run_id,
         finished_at=finished_at)
@@ -38,6 +37,10 @@ class TestCell:
     def test_allocation(self):
         assert cell(equity=0.6).allocation == "60/40"
         assert cell(equity=0.35).allocation == "35/65"
+
+    def test_first_ruin_month(self):
+        assert cell(histogram=[0, 0, 3, 1]).first_ruin_month == 2
+        assert cell(histogram=[0, 0, 0]).first_ruin_month is None
 
     def test_survival(self):
         c = cell(paths=10, histogram=[0, 1, 0, 2])
@@ -95,12 +98,15 @@ def test_cells_without_real_metrics():
         assert all(getattr(c, key) is None for key in REAL_KEYS)
 
 
-def test_cells_ignore_removed_ruin_age_shortfalls():
-    # results.json written before ruin_month_es5/_es10 were removed.
+def test_cells_ignore_removed_ruin_age_statistics():
+    # results.json written before the statistics over ruined paths were
+    # removed.
     results = json.loads(GOLDEN.read_text())
     for entries in results["results"].values():
         for e in entries:
-            e["ruin_month_es5"] = e["ruin_month_es10"] = 12.0
+            for key in ("ruin_month_min", "ruin_month_median",
+                        "ruin_month_es5", "ruin_month_es10"):
+                e[key] = 12.0
     assert len(d.cells_from_results(results)) == sum(
         len(v) for v in results["results"].values())
 

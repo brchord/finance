@@ -304,9 +304,10 @@ Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
 
 - `spending`, `allocation`, `tax_regime` (existing; add a numeric `equity`
   so the UI doesn't parse the `"60-40"` string)
-- `ruin_path_count`, `ruin_month_min`, `ruin_month_median`,
-  (`ruin_month_es5` / `ruin_month_es10` were removed; older results
-  still carry them and the UI ignores them)
+- `ruin_path_count`. Ruin timing is only in `ruin_histogram`; the
+  statistics over ruined paths (`ruin_month_min`, `ruin_month_median`,
+  `ruin_month_es5`, `ruin_month_es10`) were removed. Older results still
+  carry them and the UI ignores them.
 - `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
 - `ruin_histogram`: monthly counts over the horizon (new)
 - `nav_bands: {years: [0, 1, ...], p5: [], p10: [], p25: [], p50: []}`:

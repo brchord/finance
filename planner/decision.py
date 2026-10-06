@@ -40,7 +40,6 @@ class Cell:
     tax_regime: str
     total_paths: int
     ruin_count: int
-    ruin_month_min: Optional[float]
     p5_return: float
     p10_return: float
     p25_return: float
@@ -95,6 +94,12 @@ class Cell:
         "real_nav_bands or nav_bands; None when the run predates them."
         return self.real_nav_bands if real else self.nav_bands
 
+    @property
+    def first_ruin_month(self) -> Optional[int]:
+        "Month of the earliest ruin (a single path), None if none."
+        return next((m for m, n in enumerate(self.ruin_histogram) if n > 0),
+                    None)
+
     def survival(self) -> List[float]:
         """
         P(still solvent at the end of month m) for each month m of the
@@ -143,7 +148,6 @@ def cells_from_results(results: dict, run_id: str = "",
              tax_regime=e["tax_regime"],
              total_paths=total_paths,
              ruin_count=e["ruin_path_count"],
-             ruin_month_min=e["ruin_month_min"],
              p5_return=e["p5_return"],
              p10_return=e["p10_return"],
              p25_return=e["p25_return"],

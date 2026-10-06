@@ -130,10 +130,10 @@ def ruin_probability_by_age(ruin_histogram: Sequence[float],
     path ruined in month m is ruined at age retirement_age + m / 12, the
     same convention as planner.decision.month_to_age.
 
-    Unlike ruin_month_median, which is computed over ruined paths only,
-    these are monotonic in risk: a portfolio that rarely ruins can't look
-    worse than one that ruins often just because its few ruins happen
-    earlier. Keys are the ages formatted
+    Unlike statistics computed over ruined paths only (such as a median
+    ruin age), these are monotonic in risk: a portfolio that rarely ruins
+    can't look worse than one that ruins often just because its few ruins
+    happen earlier. Keys are the ages formatted
     with :g ("85", "92.5") so they survive a JSON round trip.
     """
     cumulative = np.cumsum(np.asarray(ruin_histogram, dtype=float))
@@ -1080,25 +1080,10 @@ class MonteCarloCLI:
                     (df_data["Terminal NAV"] - initial_nav)
                     / initial_nav
                 )
-                # Earliest and median ruin month, over ruined paths only.
-                # Anything else about ruin timing derives from
-                # ruin_histogram (and ruin_prob_by_age below).
-                ruin_ages = {
-                    i: int(v) for
-                    (i, v) in enumerate(sim["ruin_histogram"]) if v > 0
-                }
-                v = list(ruin_ages.keys())
-                f = list(ruin_ages.values())
-                ruin_flat_data = np.repeat(v, f)
-
-                if len(ruin_flat_data) > 0:
-                    p50 = np.quantile(ruin_flat_data, 0.5)
-                    ruin = len(ruin_flat_data)
-                    min_ruin_age = int(ruin_flat_data.min())
-                else:
-                    p50 = None
-                    ruin = 0
-                    min_ruin_age = None
+                # Ruin timing is reported only as ruin_histogram (and
+                # ruin_prob_by_age below); consumers derive any statistic
+                # they need from it.
+                ruin = int(sum(sim["ruin_histogram"]))
 
                 entry = {}
                 entry["spending"] = yearly_spending
@@ -1107,9 +1092,6 @@ class MonteCarloCLI:
                 entry["tax_regime"] = sim["tax_regime"]
 
                 entry["ruin_path_count"] = ruin
-                entry["ruin_month_min"] = min_ruin_age
-                entry["ruin_month_median"] = (
-                        float(p50) if p50 is not None else None)
 
                 entry["p5_return"] = df_data["Returns"].quantile(0.05)
                 entry["p10_return"] = df_data["Returns"].quantile(0.1)
