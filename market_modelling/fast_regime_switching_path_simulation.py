@@ -384,7 +384,8 @@ def simulate_regime_switching_paths_fast(
 
     # Step 3: equilibrium drift + CAPE valuation drag recurrence.
     equilibrium_equity_drift = (
-        simulator.earnings_growth + simulator.expected_inflation) * dt
+        simulator.earnings_growth + simulator.buyback_yield +
+        simulator.expected_inflation) * dt
 
     return _simulate_regime_recurrence_fast(
         increments,

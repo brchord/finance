@@ -206,7 +206,8 @@ def simulate_hybrid_paths_fast(
 
     dt = 1.0 / 12.0
     equilibrium_equity_drift = (
-        simulator.earnings_growth + simulator.expected_inflation) * dt
+        simulator.earnings_growth + simulator.buyback_yield +
+        simulator.expected_inflation) * dt
     historical_spx_mean = float(simulator.historical_mean_returns[0])
 
     return _simulate_hybrid_core(

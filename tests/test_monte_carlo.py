@@ -10,6 +10,8 @@ import job_files
 import monte_carlo as mc
 
 GOLDEN = Path(__file__).parent / "golden" / "monte_carlo_agg.json"
+GOLDEN_ASSUMPTIONS = (Path(__file__).parent / "golden" /
+                      "monte_carlo_agg_assumptions.json")
 
 SWEEP = dict(
     yearly_spending_floor=80_000, yearly_spending_ceil=90_000,
@@ -20,12 +22,13 @@ SWEEP = dict(
 ALL_MODELS = [m.name() for m in mc.MonteCarloCLI.SUPPORTED_MODELS]
 
 
-def run_cli(tmp_path, market_cache, tag="run", **overrides):
+def run_cli(tmp_path, market_cache, tag="run", backend="process",
+            **overrides):
     config = {**SWEEP, "models": ALL_MODELS, **overrides}
     config_file = tmp_path / f"{tag}.json"
     config_file.write_text(json.dumps(config))
     cli = mc.MonteCarloCLI(str(config_file), str(market_cache))
-    cli.run()
+    cli.run(backend=backend)
     cli.aggregate()
     return cli
 
@@ -95,6 +98,14 @@ class TestMCConfig:
             assert [p["tax_regime"] for p in cell] == ["r1", "r2", "r3"]
             assert len({(p["equity_allocation"], p["yearly_spending"])
                         for p in cell}) == 1
+
+    def test_dividend_yield_reaches_every_portfolio(self):
+        assert all(p["dividend_yield"] == 0.01
+                   for p in self.make().portfolio_configs())
+        cfg = self.make(dividend_yield=0.02)
+        assert all(p["dividend_yield"] == 0.02
+                   for p in cfg.portfolio_configs())
+        assert cfg.total_portfolios() == self.make().total_portfolios()
 
     def test_template_is_not_shared_between_configs(self):
         first, second = list(self.make().portfolio_configs())[:2]
@@ -330,6 +341,13 @@ class TestCommandLine:
 
         results = json.loads((tmp_path / "results.json").read_text())
         assert len(results["results"][ALL_MODELS[0]]) == 8
+        assert results["assumptions"] == {
+            "dividend_yield": 0.01, "simulator_params": {}}
+        for entry in results["results"][ALL_MODELS[0]]:
+            for key in ("p5_real_return", "p10_real_return",
+                        "p25_real_return", "p50_real_return",
+                        "real_nav_bands", "ruin_prob_by_age"):
+                assert entry[key] is not None, key
         # Raw output is opt-in with --job-dir, and nothing is left behind
         # by the atomic writes.
         assert sorted(f.name for f in tmp_path.iterdir()) == [
@@ -403,9 +421,318 @@ class TestAggregate:
         entry = self.build(tmp_path, market_cache, [0.0] * 12, [1.0] * 4)
         assert entry["nav_bands"] is None
 
+    def test_raw_results_without_new_fields(self, tmp_path, market_cache):
+        # Raw files written before assumptions and real-terms metrics
+        # existed still aggregate; the new fields are None, except
+        # ruin_prob_by_age, which only needs the ruin histogram.
+        histogram = [0.0] * 120
+        histogram[30] = 1.0
+        cli = mc.MonteCarloCLI("unused.json", str(market_cache))
+        cli.simulation_config = mc.MonteCarloCLI.MCConfig(
+            models=["M"], retirement_age=60)
+        cli.raw_results = {
+            "initial_nav": 1_000_000, "years": 10, "total_paths": 4,
+            "simulations": {"M": [{
+                "spending": 50_000, "equity": 0.6, "ladder": 0.4,
+                "tax_regime": "none", "ruin_histogram": histogram,
+                "results": {"Terminal SPX": [1.0] * 4,
+                            "Terminal NAV": [0.0] + [1.0] * 3}}]},
+        }
+        cli.aggregate()
+        assert cli.agg_results["assumptions"] is None
+        entry = cli.agg_results["results"]["M"][0]
+        for key in ("p5_real_return", "p10_real_return", "p25_real_return",
+                    "p50_real_return", "real_nav_bands"):
+            assert entry[key] is None, key
+        assert entry["ruin_prob_by_age"] == {"75": 0.25, "85": 0.25,
+                                             "95": 0.25}
+
     def test_aggregate_only_once(self, cli):
         with pytest.raises(RuntimeError, match="only be run once"):
             cli.aggregate()
+
+
+
+BACKENDS = ["process", "numba"]
+
+
+@pytest.fixture(scope="module")
+def flat_cpi_market(tmp_path_factory):
+    """The synthetic market with a constant CPI: zero inflation."""
+    from conftest import make_market_levels
+    levels = make_market_levels()
+    levels["cpi"] = 97.0
+    path = tmp_path_factory.mktemp("flat_cpi") / "market.parquet"
+    levels.to_parquet(path)
+    return path
+
+
+class TestAssumptions:
+    """simulator_params, dividend_yield and their validation."""
+    MODELS = ["RegimeSwitchingValuationVARSimulator",
+              "RawBlockBootstrapSimulator"]
+
+    def run(self, tmp_path, market_cache, tag, backend="process",
+            **overrides):
+        return run_cli(tmp_path, market_cache, tag=tag, backend=backend,
+                       models=self.MODELS, **overrides)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_assumptions_are_recorded(self, backend, tmp_path, market_cache):
+        params = {"initial_cape": 40.0, "annual_buyback_yield": 0.015}
+        cli = self.run(tmp_path, market_cache, "rec", backend,
+                       simulator_params=params, dividend_yield=0.02)
+        expected = {"dividend_yield": 0.02, "simulator_params": params}
+        assert cli.raw_results["assumptions"] == expected
+        assert cli.agg_results["assumptions"] == expected
+
+    def test_defaults_match_the_original_model(self, cli):
+        assert cli.agg_results["assumptions"] == {
+            "dividend_yield": 0.01, "simulator_params": {}}
+
+    @pytest.mark.parametrize("params", [{}, None])
+    def test_empty_or_missing_params_change_nothing(
+            self, params, tmp_path, market_cache):
+        base = self.run(tmp_path, market_cache, "base")
+        overrides = {} if params is None else {"simulator_params": params}
+        other = self.run(tmp_path, market_cache, "other", **overrides)
+        assert comparable(other.raw_results) == comparable(base.raw_results)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_params_reach_only_models_that_accept_them(
+            self, backend, tmp_path, market_cache):
+        base = self.run(tmp_path, market_cache, "base", backend)
+        bought = self.run(tmp_path, market_cache, "bought", backend,
+                          simulator_params={"annual_buyback_yield": 0.02})
+        for model, changed in (("RegimeSwitchingValuationVARSimulator",
+                                True),
+                               ("RawBlockBootstrapSimulator", False)):
+            a = base.raw_results["simulations"][model][0]["results"]
+            b = bought.raw_results["simulations"][model][0]["results"]
+            assert (a["Terminal SPX"] != b["Terminal SPX"]) is changed, model
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_dividend_yield_reaches_the_strategy(
+            self, backend, tmp_path, market_cache):
+        low = self.run(tmp_path, market_cache, "low", backend,
+                       dividend_yield=0.01)
+        high = self.run(tmp_path, market_cache, "high", backend,
+                        dividend_yield=0.03)
+        model = "RawBlockBootstrapSimulator"
+        a = low.raw_results["simulations"][model][0]["results"]
+        b = high.raw_results["simulations"][model][0]["results"]
+        assert a["Terminal SPX"] == b["Terminal SPX"]  # same markets
+        assert np.mean(b["Terminal NAV"]) > np.mean(a["Terminal NAV"])
+
+    def test_unknown_simulator_param_is_rejected(
+            self, tmp_path, market_cache):
+        with pytest.raises(ValueError, match="annual_buyback_yeild"):
+            self.run(tmp_path, market_cache, "typo",
+                     simulator_params={"annual_buyback_yeild": 0.01})
+
+    def test_every_unknown_param_is_listed_sorted(
+            self, tmp_path, market_cache):
+        with pytest.raises(ValueError, match=r": alpha, zulu$"):
+            self.run(tmp_path, market_cache, "typos",
+                     simulator_params={"zulu": 1, "initial_cape": 40.0,
+                                       "alpha": 2})
+
+    def test_partially_accepted_param_is_logged(
+            self, tmp_path, market_cache, caplog):
+        with caplog.at_level("INFO"):
+            self.run(tmp_path, market_cache, "partial",
+                     simulator_params={"annual_buyback_yield": 0.01})
+        ignoring = [r.getMessage() for r in caplog.records
+                    if "ignores simulator_params" in r.getMessage()]
+        assert ignoring == ["RawBlockBootstrapSimulator ignores "
+                            "simulator_params annual_buyback_yield"]
+
+    def load(self, tmp_path, market_cache, models, params):
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": models, "simulator_params": params}))
+        cli = mc.MonteCarloCLI(str(config_file), str(market_cache))
+        cli._load_config()
+        return cli
+
+    def test_valuation_adjusted_takes_cape_but_not_buybacks(
+            self, tmp_path, market_cache):
+        params = {"initial_cape": 40.0, "annual_buyback_yield": 0.015}
+        cli = self.load(tmp_path, market_cache,
+                        ["ValuationAdjustedVARSimulator",
+                         "RegimeSwitchingValuationVARSimulator"], params)
+        cli._validate_simulator_params()
+        valuation = cli._build_simulator("ValuationAdjustedVARSimulator")
+        assert valuation.initial_cape == 40.0
+        assert not hasattr(valuation, "buyback_yield")
+        regime = cli._build_simulator("RegimeSwitchingValuationVARSimulator")
+        assert (regime.initial_cape, regime.buyback_yield) == (40.0, 0.015)
+
+    def test_buybacks_alone_on_valuation_adjusted_are_rejected(
+            self, tmp_path, market_cache):
+        cli = self.load(tmp_path, market_cache,
+                        ["ValuationAdjustedVARSimulator"],
+                        {"annual_buyback_yield": 0.015})
+        with pytest.raises(ValueError, match="annual_buyback_yield"):
+            cli._validate_simulator_params()
+
+
+class TestRealMetrics:
+    """Terminal Real NAV, real_nav_bands and p*_real_return."""
+    MODELS = TestAssumptions.MODELS
+
+    def test_real_metrics(self, cli):
+        for model, entries in cli.agg_results["results"].items():
+            raw = cli.raw_results["simulations"][model]
+            for entry, sim in zip(entries, raw):
+                where = f"{model} {entry['allocation']}"
+                nominal = np.asarray(sim["results"]["Terminal NAV"])
+                real = np.asarray(sim["results"]["Terminal Real NAV"])
+                # The synthetic market inflates on every path.
+                assert np.all(real <= nominal + 1e-9), where
+                assert entry["p50_real_return"] <= entry["p50_return"], where
+                bands = entry["real_nav_bands"]
+                assert bands["years"] == entry["nav_bands"]["years"], where
+
+    def test_year_zero_is_the_initial_nav(self, cli):
+        for entries in cli.agg_results["results"].values():
+            for entry in entries:
+                bands = entry["real_nav_bands"]
+                for key in ("p5", "p10", "p25", "p50"):
+                    assert bands[key][0] == SWEEP["initial_nav"], key
+
+    def test_ruined_paths_are_zero_in_real_terms(
+            self, tmp_path, market_cache):
+        cli = run_cli(tmp_path, market_cache, "ruin",
+                      models=["RawBlockBootstrapSimulator"],
+                      yearly_spending_floor=140_000,
+                      yearly_spending_ceil=140_000, total_paths=40)
+        for sim in cli.raw_results["simulations"][
+                "RawBlockBootstrapSimulator"]:
+            nominal = np.asarray(sim["results"]["Terminal NAV"])
+            real = np.asarray(sim["results"]["Terminal Real NAV"])
+            assert np.any(nominal == 0.0)  # not vacuous
+            np.testing.assert_array_equal(real == 0.0, nominal == 0.0)
+            # Ruined paths count as 0 in the bands, not dropped.
+            bands = sim["real_nav_bands"]
+            for q in mc.NAV_BAND_PERCENTILES:
+                assert bands[f"p{q}"][-1] == pytest.approx(
+                    np.percentile(real, q))
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_zero_inflation_real_equals_nominal(
+            self, backend, tmp_path, flat_cpi_market):
+        # RawBlockBootstrap resamples the history's CPI returns, which are
+        # all zero here, so every price level is exactly 1.
+        cli = run_cli(tmp_path, flat_cpi_market, "flat", backend,
+                      models=["RawBlockBootstrapSimulator"])
+        for sim in cli.raw_results["simulations"][
+                "RawBlockBootstrapSimulator"]:
+            assert (sim["results"]["Terminal Real NAV"]
+                    == sim["results"]["Terminal NAV"])
+            assert sim["real_nav_bands"] == sim["nav_bands"]
+        for entry in cli.agg_results["results"][
+                "RawBlockBootstrapSimulator"]:
+            for q in (5, 10, 25, 50):
+                assert entry[f"p{q}_real_return"] == pytest.approx(
+                    entry[f"p{q}_return"], rel=1e-12, abs=1e-15), q
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_fractional_years_share_the_nominal_snapshots(
+            self, backend, tmp_path, market_cache):
+        # 10.5 years: the trailing half year has no annual snapshot.
+        cli = run_cli(tmp_path, market_cache, "frac", backend,
+                      models=self.MODELS, years_to_simulate=10.5)
+        for sims in cli.raw_results["simulations"].values():
+            for sim in sims:
+                assert sim["real_nav_bands"]["years"] == list(range(11))
+                assert (sim["real_nav_bands"]["years"]
+                        == sim["nav_bands"]["years"])
+
+
+@pytest.fixture(scope="module")
+def ruinous(tmp_path_factory, market_cache):
+    """A run where most paths ruin, at many different ages."""
+    t = TestRuinProbabilityByAge
+    ages = [t.age(m) for m in t.MONTHS] + list(t.EXTRA_AGES)
+    return run_cli(tmp_path_factory.mktemp("ruin_age"), market_cache,
+                   models=["RawBlockBootstrapSimulator"],
+                   yearly_spending_floor=140_000,
+                   yearly_spending_ceil=140_000, equity_floor=0.6,
+                   equity_ceil=0.6, total_paths=40, tax_regimes=["none"],
+                   retirement_age=t.RETIREMENT_AGE, ruin_ages=ages)
+
+
+class TestRuinProbabilityByAge:
+    """ruin_prob_by_age on a run where ruins happen at many ages."""
+    RETIREMENT_AGE = 60.5
+    # Whole months after retirement, for comparing with Cell.survival().
+    MONTHS = (1, 60, 80, 90, 100, 110, 119, 120)
+    EXTRA_AGES = (55, 60.5, 200)  # before / at retirement, past horizon
+
+    @staticmethod
+    def age(month):
+        return TestRuinProbabilityByAge.RETIREMENT_AGE + month / 12.0
+
+    @pytest.fixture
+    def entry(self, ruinous):
+        return ruinous.agg_results["results"][
+            "RawBlockBootstrapSimulator"][0]
+
+    def test_ruins_happen_at_many_ages(self, entry):
+        ruin_months = np.nonzero(entry["ruin_histogram"])[0]
+        assert len(ruin_months) >= 5
+        assert ruin_months.min() < 90 < ruin_months.max()
+
+    def test_is_non_decreasing_and_bounded(self, entry):
+        probs = entry["ruin_prob_by_age"]
+        by_age = sorted((float(k), v) for k, v in probs.items())
+        values = [v for _, v in by_age]
+        assert values == sorted(values)
+        assert len(set(values)) > 2  # it actually moves with age
+        ruined = entry["ruin_path_count"] / 40
+        assert max(values) == ruined
+
+    def test_agrees_with_cell_survival(self, ruinous):
+        from planner.decision import cells_from_results
+        [cell] = cells_from_results(ruinous.agg_results)
+        survival = cell.survival()
+        for n in self.MONTHS:
+            assert cell.ruin_prob_by_age[f"{self.age(n):g}"] == (
+                pytest.approx(1.0 - survival[n - 1])), n
+
+    def test_ages_at_or_before_retirement_are_zero(self, entry):
+        assert entry["ruin_prob_by_age"]["55"] == 0.0
+        assert entry["ruin_prob_by_age"]["60.5"] == 0.0
+
+    def test_ages_past_the_horizon_count_every_ruin(self, entry):
+        assert entry["ruin_prob_by_age"]["200"] == (
+            entry["ruin_path_count"] / 40)
+
+    def test_default_ages_in_the_shared_run(self, cli):
+        paths = cli.agg_results["total_paths"]
+        for entries in cli.agg_results["results"].values():
+            for entry in entries:
+                probs = entry["ruin_prob_by_age"]
+                assert list(probs) == ["75", "85", "95"]
+                # Retirement at 60 with a 10-year horizon: every age is
+                # past the end, so each covers all ruined paths.
+                assert all(p == entry["ruin_path_count"] / paths
+                           for p in probs.values())
+
+    def test_custom_ruin_ages(self, tmp_path, market_cache):
+        cli = run_cli(tmp_path, market_cache, "ages",
+                      models=TestAssumptions.MODELS, ruin_ages=[62, 65.5])
+        entry = cli.agg_results["results"][TestAssumptions.MODELS[0]][0]
+        assert list(entry["ruin_prob_by_age"]) == ["62", "65.5"]
+
+
+def check_golden(cli, path):
+    actual = json.loads(json.dumps(cli.agg_results))
+    if os.environ.get("UPDATE_GOLDEN"):
+        path.write_text(json.dumps(actual, indent=2) + "\n")
+    expected = json.loads(path.read_text())
+    assert_close(actual, expected)
 
 
 def test_golden_aggregates(cli):
@@ -415,11 +742,24 @@ def test_golden_aggregates(cli):
     change is intended, regenerate with `UPDATE_GOLDEN=1 pytest` and review
     the diff of tests/golden/monte_carlo_agg.json.
     """
-    actual = json.loads(json.dumps(cli.agg_results))
-    if os.environ.get("UPDATE_GOLDEN"):
-        GOLDEN.write_text(json.dumps(actual, indent=2) + "\n")
-    expected = json.loads(GOLDEN.read_text())
-    assert_close(actual, expected)
+    check_golden(cli, GOLDEN)
+
+
+def test_golden_aggregates_with_assumptions(tmp_path, market_cache):
+    """
+    Same as test_golden_aggregates for non-default simulator_params and
+    dividend_yield, pinning the initial_cape / buyback / dividend plumbing.
+    Regenerated by the same `UPDATE_GOLDEN=1 pytest`.
+    """
+    cli = run_cli(
+        tmp_path, market_cache, "golden_assumptions",
+        models=["HybridValuationVARSimulator",
+                "RegimeSwitchingValuationVARSimulator",
+                "ValuationAdjustedVARSimulator"],
+        tax_regimes=["current_law_indexed"], dividend_yield=0.02,
+        simulator_params={"initial_cape": 40.0, "target_cape": 26.0,
+                          "annual_buyback_yield": 0.015})
+    check_golden(cli, GOLDEN_ASSUMPTIONS)
 
 
 def assert_close(actual, expected, path="agg"):

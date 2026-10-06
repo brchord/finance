@@ -1,0 +1,24 @@
+{
+    "yearly_spending_floor": 100000,
+    "yearly_spending_ceil": 140000,
+    "spend_increments": 10000,
+    "equity_floor": 0.3,
+    "equity_ceil": 0.9,
+    "weight_increments": 0.1,
+    "initial_nav": 8600000,
+    "years_to_simulate": 63,
+    "retirement_age": 42,
+    "total_paths": 50000,
+    "models": ["RegimeSwitchingValuationVARSimulator", "HybridValuationVARSimulator"],
+    "tax_regimes": ["current_law_indexed"],
+    "workers": 20,
+    "master_seed": 2027,
+    "dividend_yield": 0.012,
+    "simulator_params": {
+        "initial_cape": 40.0,
+        "target_cape": 22.0,
+        "annual_earnings_growth": 0.02,
+        "annual_buyback_yield": 0.015
+    },
+    "ruin_ages": [75, 85, 95, 105]
+}

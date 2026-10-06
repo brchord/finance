@@ -56,6 +56,36 @@ def test_cells_from_results_reads_cli_output():
     assert c.nav_bands["years"][0] == 0
 
 
+REAL_KEYS = ("real_nav_bands", "p5_real_return", "p10_real_return",
+             "p25_real_return", "p50_real_return", "ruin_prob_by_age")
+
+
+def test_cells_read_real_metrics():
+    results = json.loads(GOLDEN.read_text())
+    for entries in results["results"].values():
+        for i, e in enumerate(entries):
+            e["real_nav_bands"] = {"years": [0], "p50": [float(i)]}
+            for q in (5, 10, 25, 50):
+                e[f"p{q}_real_return"] = q / 100.0 + i
+            e["ruin_prob_by_age"] = {"85": i / 1000.0}
+    for c in d.cells_from_results(results):
+        entry = next(e for e in results["results"][c.model]
+                     if (e["spending"], e["equity"], e["tax_regime"]) ==
+                     (c.spending, c.equity, c.tax_regime))
+        for key in REAL_KEYS:
+            assert getattr(c, key) == entry[key], key
+
+
+def test_cells_without_real_metrics():
+    results = json.loads(GOLDEN.read_text())
+    for entries in results["results"].values():
+        for e in entries:
+            for key in REAL_KEYS:
+                e.pop(key, None)
+    for c in d.cells_from_results(results):
+        assert all(getattr(c, key) is None for key in REAL_KEYS)
+
+
 def test_cells_without_nav_bands():
     results = json.loads(GOLDEN.read_text())
     for entries in results["results"].values():
