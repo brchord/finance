@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -54,3 +56,39 @@ class TestStatusWriter:
 
 def test_git_commit_outside_repo_is_none(tmp_path):
     assert job_files.git_commit(tmp_path) is None
+
+
+class TestQueue:
+    TRY_LOCK = (
+        "import fcntl, sys\n"
+        "f = open(sys.argv[1], 'a')\n"
+        "try:\n"
+        "    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "except BlockingIOError:\n"
+        "    sys.exit(1)\n")
+
+    def other_process_can_lock(self, path):
+        return subprocess.run([sys.executable, "-c", self.TRY_LOCK,
+                               str(path)]).returncode == 0
+
+    def test_run_lock_excludes_other_processes(self, tmp_path):
+        lock = tmp_path / "queue.lock"
+        with job_files.run_lock(lock):
+            assert not self.other_process_can_lock(lock)
+        assert self.other_process_can_lock(lock)
+
+    def test_no_path_is_no_lock(self):
+        with job_files.run_lock(None):
+            pass
+
+    def test_queued_lifecycle(self, tmp_path):
+        writer = job_files.StatusWriter(tmp_path, pid=7, queued=True)
+        status = job_files.read_json(tmp_path / job_files.STATUS_FILE)
+        assert status["state"] == job_files.QUEUED
+        assert status["queued_at"] is not None
+        assert status["started_at"] is None
+
+        writer.start()
+        status = job_files.read_json(tmp_path / job_files.STATUS_FILE)
+        assert status["state"] == job_files.RUNNING
+        assert status["started_at"] is not None

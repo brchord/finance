@@ -32,6 +32,9 @@ from planner import decision
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEWS_DIR_ENV = "PLANNER_REVIEWS_DIR"
 REVIEW_FILE = "review.json"
+# The run queue (job_files.run_lock), shared by every review under a root:
+# runs execute one at a time, since each already uses every core.
+QUEUE_LOCK_FILE = ".run-queue.lock"
 
 # A run whose config.json exists but whose CLI hasn't written status.json
 # yet is "starting" for this long, then considered failed.
@@ -276,7 +279,8 @@ class Run:
                 return STARTING
             return job_files.FAILED
         state = self.status["state"]
-        if state == job_files.RUNNING and not _pid_alive(self.status["pid"]):
+        if (state in (job_files.QUEUED, job_files.RUNNING)
+                and not _pid_alive(self.status["pid"])):
             return job_files.FAILED
         return state
 
@@ -286,7 +290,7 @@ class Run:
 
     @property
     def active(self) -> bool:
-        return self.state in (STARTING, job_files.RUNNING)
+        return self.state in (STARTING, job_files.QUEUED, job_files.RUNNING)
 
     @property
     def sweep(self) -> Sweep:
@@ -297,7 +301,7 @@ class Run:
         if self.status is None:
             return (None if self.state == STARTING
                     else "the run never started; see log.txt")
-        if (self.status["state"] == job_files.RUNNING
+        if (self.status["state"] in (job_files.QUEUED, job_files.RUNNING)
                 and self.state == job_files.FAILED):
             return "the process exited without reporting; see log.txt"
         return self.status.get("error")
@@ -310,7 +314,12 @@ class Run:
 
     @property
     def started_at(self) -> Optional[str]:
+        "When the run left the queue; None while queued."
         return self.status["started_at"] if self.status else None
+
+    @property
+    def queued_at(self) -> Optional[str]:
+        return self.status.get("queued_at") if self.status else None
 
     @property
     def finished_at(self) -> Optional[str]:
@@ -350,6 +359,12 @@ def list_runs(review: Review) -> List[Run]:
     return sorted(runs, key=lambda r: r.started_at or "9999", reverse=True)
 
 
+def active_runs(root: Optional[Path] = None) -> List[Run]:
+    "Runs queued or in progress in any review under root (the run queue)."
+    return [run for review in list_reviews(root)
+            for run in list_runs(review) if run.active]
+
+
 def review_cells(review: Review) -> List[decision.Cell]:
     "Cells of every succeeded run in the review (unmerged)."
     cells: List[decision.Cell] = []
@@ -368,7 +383,8 @@ def launch(review: Review, sweep: Sweep, *,
     """
     Starts a run of sweep in review, unless the same sweep already
     succeeded or is in progress there, in which case that run is returned.
-    A failed or cancelled run of the same sweep is replaced.
+    A failed or cancelled run of the same sweep is replaced. Runs wait in
+    the queue of review's root (QUEUE_LOCK_FILE) for any run in progress.
     """
     config = build_config(review.profile, sweep, workers=workers)
     run_dir = review.runs_dir / config_hash(config)
@@ -388,7 +404,8 @@ def launch(review: Review, sweep: Sweep, *,
         subprocess.Popen(
             [python, str(REPO_ROOT / "monte_carlo.py"),
              "--job-dir", str(run_dir), "--backend", "numba",
-             "-m", str(market_cache)],
+             "-m", str(market_cache),
+             "--queue-lock", str(review.path.parent / QUEUE_LOCK_FILE)],
             cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, start_new_session=True)
     return load_run(run_dir)

@@ -206,6 +206,18 @@ class TestRunState:
         assert run.state == job_files.FAILED
         assert "exited without reporting" in run.error
 
+    def test_queued_with_dead_pid_is_failed(self, review):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        run = write_run(review, status(job_files.QUEUED, proc.pid))
+        assert run.state == job_files.FAILED
+        assert "exited without reporting" in run.error
+
+    def test_queued_with_live_pid_is_active(self, review):
+        run = write_run(review, status(job_files.QUEUED, os.getpid()))
+        assert run.state == job_files.QUEUED
+        assert run.active
+
     def test_exited_child_is_not_alive(self, review):
         # An exited child we haven't waited on is a zombie, which still
         # answers kill(pid, 0).
@@ -280,3 +292,33 @@ class TestLaunch:
         wait_for(lambda: store.load_run(run.path).state
                  == job_files.RUNNING, seconds=30)
         store.cancel(store.load_run(run.path))
+
+
+class TestQueue:
+    def test_launch_waits_for_the_queue_and_can_be_cancelled(
+            self, review, market_cache):
+        lock = review.path.parent / store.QUEUE_LOCK_FILE
+        with job_files.run_lock(lock):  # a run in progress
+            run = store.launch(review, SWEEP, market_cache=market_cache,
+                               workers=2)
+            queued = wait_for(lambda: (r := store.load_run(run.path)).state
+                              == job_files.QUEUED and r, seconds=60)
+            assert queued.active and queued.progress == 0.0
+            assert [r.id for r in store.active_runs(review.path.parent)] \
+                == [run.id]
+            store.cancel(queued)
+            assert store.load_run(run.path).state == job_files.CANCELLED
+            pid = queued.status["pid"]
+            wait_for(lambda: not store._pid_alive(pid), seconds=10)
+
+    def test_queued_run_starts_when_the_queue_frees(self, review,
+                                                    market_cache):
+        lock = review.path.parent / store.QUEUE_LOCK_FILE
+        with job_files.run_lock(lock):
+            run = store.launch(review, SWEEP, market_cache=market_cache,
+                               workers=2)
+            wait_for(lambda: store.load_run(run.path).state
+                     == job_files.QUEUED, seconds=60)
+        done = wait_for(lambda: (r := store.load_run(run.path)).state
+                        == job_files.SUCCEEDED and r)
+        assert done.started_at is not None

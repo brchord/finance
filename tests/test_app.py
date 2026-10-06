@@ -213,3 +213,25 @@ def test_run_button_launches_a_run(monkeypatch, tmp_path, market_cache):
         time.sleep(0.2)
     at.run()
     assert "Max sustainable spending" in [m.label for m in at.metric]
+
+
+def test_explorer_shows_a_queued_run(monkeypatch, tmp_path, market_cache,
+                                     reviews_with_run):
+    import shutil
+    root = tmp_path / "reviews"
+    shutil.copytree(reviews_with_run, root)
+    review = store.list_reviews(root)[0]
+    sweep = store.Sweep(spending_floor=50_000, spending_ceil=50_000,
+                        spending_step=10_000, equity_floor=0.5,
+                        equity_ceil=0.5, equity_step=0.1, total_paths=100)
+    with job_files.run_lock(root / store.QUEUE_LOCK_FILE):
+        run = store.launch(review, sweep, market_cache=market_cache,
+                           workers=2)
+        deadline = time.monotonic() + 60
+        while store.load_run(run.path).state != job_files.QUEUED:
+            assert time.monotonic() < deadline, "never queued"
+            time.sleep(0.1)
+        at = run_page(monkeypatch, root)
+        assert any("queued: starts when" in p.proto.text
+                   for p in at.get("progress"))
+        store.cancel(store.load_run(run.path))

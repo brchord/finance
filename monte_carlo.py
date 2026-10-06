@@ -1179,6 +1179,14 @@ def parse_args():
                              "into it. -c and -o override the config and "
                              "results paths",
                         dest="job_dir")
+    parser.add_argument("-q", "--queue-lock",
+                        help="Run queue: wait for an exclusive lock on this "
+                             "file before simulating, so runs sharing it run "
+                             "one at a time (each already uses every "
+                             "worker; concurrent runs only add memory). "
+                             f"With --job-dir, {job_files.STATUS_FILE} says "
+                             f"'{job_files.QUEUED}' while waiting",
+                        dest="queue_lock")
     parser.add_argument("-m", "--market-cache-file",
                         help="Specifies an alternative parquet market data "
                              "cache file",
@@ -1258,18 +1266,25 @@ def main():
         level=logging.INFO)
     args = parse_args()
 
+    lock = Path(args.queue_lock) if args.queue_lock is not None else None
     if args.job_dir is None:
         cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
-        _run_and_save(cli, args)
+        with job_files.run_lock(lock):
+            _run_and_save(cli, args)
         return
 
     job_dir = Path(args.job_dir)
-    status = job_files.StatusWriter(job_dir, pid=os.getpid())
+    status = job_files.StatusWriter(job_dir, pid=os.getpid(),
+                                    queued=lock is not None)
     try:
-        _write_meta(job_dir, args)
-        cli = MonteCarloCLI(args.config_filename, args.market_data_filename,
-                            progress_callback=status.progress)
-        _run_and_save(cli, args)
+        with job_files.run_lock(lock):
+            if lock is not None:
+                status.start()
+            _write_meta(job_dir, args)
+            cli = MonteCarloCLI(args.config_filename,
+                                args.market_data_filename,
+                                progress_callback=status.progress)
+            _run_and_save(cli, args)
     except BaseException as exc:
         status.failed(
             "".join(traceback.format_exception_only(exc)).strip())

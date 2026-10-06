@@ -395,6 +395,45 @@ class TestCommandLine:
         assert sorted(f.name for f in tmp_path.iterdir()) == [
             "config.json", "meta.json", "results.json", "status.json"]
 
+    def test_queue_lock_flag(self, monkeypatch):
+        self.set_command_line(monkeypatch, ["--job-dir", "runs/abc",
+                                            "--queue-lock", "q.lock"])
+        assert mc.parse_args().queue_lock == "q.lock"
+        self.set_command_line(monkeypatch, ["--job-dir", "runs/abc"])
+        assert mc.parse_args().queue_lock is None
+
+    def test_job_waits_in_the_queue(self, tmp_path, market_cache):
+        import subprocess
+        import time
+        config = {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        lock = tmp_path / "queue.lock"
+        status_file = tmp_path / job_files.STATUS_FILE
+
+        def state():
+            status = job_files.read_json(status_file)
+            return status and status["state"]
+
+        with job_files.run_lock(lock):  # another run holds the queue
+            proc = subprocess.Popen(
+                [sys.executable, str(Path(mc.__file__)),
+                 "--job-dir", str(tmp_path), "-m", str(market_cache),
+                 "--backend", "numba", "--queue-lock", str(lock)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.monotonic() + 60
+            while state() != job_files.QUEUED:
+                assert time.monotonic() < deadline, "never queued"
+                time.sleep(0.1)
+            time.sleep(1.0)
+            # Still waiting: nothing simulated, nothing written.
+            assert state() == job_files.QUEUED
+            assert not (tmp_path / job_files.META_FILE).exists()
+        assert proc.wait(timeout=120) == 0
+        status = job_files.read_json(status_file)
+        assert status["state"] == job_files.SUCCEEDED
+        assert status["queued_at"] <= status["started_at"]
+        assert (tmp_path / job_files.RESULTS_FILE).exists()
+
     def test_main_with_job_dir_records_failure(
             self, tmp_path, market_cache, monkeypatch):
         config = {**SWEEP, "models": ["NoSuchModel"], "total_paths": 4}
