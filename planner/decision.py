@@ -264,7 +264,7 @@ class Criteria:
     someone in the household is alive), is at most ruin_ceiling. Ruin
     after the horizon isn't simulated, so it doesn't count.
     """
-    ruin_ceiling: float = 0.05
+    ruin_ceiling: float = 0.01
     ruin_tolerance: float = 0.01      # absolute, as a fraction (1pp)
     years_in_ruin_tolerance: float = 0.1
     p10_tolerance: float = 0.10       # relative, on terminal wealth

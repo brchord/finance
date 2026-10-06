@@ -142,7 +142,9 @@ def ruined_at(month, count, months=480):
 
 
 class TestRank:
-    criteria = d.Criteria()  # retirement at 65, default mortality
+    # Retirement at 65, default mortality; a 5% ceiling so the
+    # examples' 1-3% ruin rates pass.
+    criteria = d.Criteria(ruin_ceiling=0.05)
 
     def ranked(self, *cells):
         return d.rank(list(cells), self.criteria)
@@ -222,7 +224,7 @@ class TestRank:
         # apart: c is dropped at step 0 even though, ruined at 74, it has
         # the fewest years in ruin. a and b tie on years in ruin (within
         # 0.1 years over a 10-year horizon), so P10 decides.
-        crit = d.Criteria(retirement_age=65)
+        crit = d.Criteria(retirement_age=65, ruin_ceiling=0.05)
         a = cell(equity=0.4, ruin=100)
         b = cell(equity=0.5, ruin=180, p10=1.5)
         c = cell(equity=0.6, histogram=[0] * 119 + [270])

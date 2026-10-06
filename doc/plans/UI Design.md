@@ -94,10 +94,12 @@ P(alive) is 46% at 85 and 18% at 95.
 
 ### Ruin ceiling
 
-- Default **5%**, on **lifetime ruin**. Lifetime ruin runs well below
+- Default **1%**, on **lifetime ruin**. Lifetime ruin runs well below
   ruin by the end of the horizon (about 3-4x for a 42-year-old with a
-  horizon to 100), so 5% here is a looser threshold than the earlier 5%
-  on ruin by the horizon. Choose the ceiling with that in mind.
+  horizon to 100): on the user's profile, the cells the earlier 5% ceiling
+  on ruin by the horizon selected had ~1% lifetime ruin, so 1% keeps
+  roughly the same risk level. 5% lifetime would allow ~14% of paths to
+  be broke by 100.
 - Adjustable in the UI. Changing it only re-evaluates results on disk.
 - A cell **passes** if the decision model's lifetime ruin ≤ ceiling.
 
@@ -329,7 +331,8 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 - **Display:** today's dollars (default) or nominal, for every return,
   the fan chart and History. Cells from runs that predate real figures
   fall back to nominal, with a note.
-- **Controls:** ruin ceiling (default 5%), reference model
+- **Controls:** lifetime ruin ceiling (default 1%), life expectancy
+  (per review), reference model
   (`RegimeSwitchingBootstrapSimulator` | `HybridValuationVARSimulator`),
   tie tolerances (collapsed by default).
 - **Headline:** maximum sustainable spending, as bracket + interpolated

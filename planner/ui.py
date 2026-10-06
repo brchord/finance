@@ -16,6 +16,7 @@ from planner import charts, decision, store
 
 PENDING_REVIEW = "_pending_review_id"
 REAL, NOMINAL = "Today's $", "Nominal $"
+DEFAULT_CEILING_PCT = decision.Criteria().ruin_ceiling * 100
 
 
 def theme() -> charts.Theme:
@@ -66,7 +67,7 @@ def criteria(review: store.Review) -> decision.Criteria:
     "The sidebar's decision settings, for review's profile and household."
     s = st.session_state
     return decision.Criteria(
-        ruin_ceiling=s.get("ceiling_pct", 5.0) / 100,
+        ruin_ceiling=s.get("ceiling_pct", DEFAULT_CEILING_PCT) / 100,
         ruin_tolerance=s.get("ruin_tol_pp", 1.0) / 100,
         years_in_ruin_tolerance=s.get("yir_tol_years", 0.1),
         p10_tolerance=s.get("p10_tol_pct", 10.0) / 100,
@@ -201,8 +202,8 @@ def sidebar():
 
         st.subheader("Decision")
         st.number_input("Lifetime ruin ceiling (%)", min_value=0.1,
-                        max_value=50.0, step=0.5, value=5.0,
-                        key="ceiling_pct",
+                        max_value=50.0, step=0.25,
+                        value=DEFAULT_CEILING_PCT, key="ceiling_pct",
                         help="A cell passes if the decision model's "
                              "lifetime ruin probability (ruined while "
                              "still alive) is at or below this. It is "
