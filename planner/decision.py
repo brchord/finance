@@ -16,6 +16,8 @@ DECISION_MODEL = "RegimeSwitchingValuationVARSimulator"
 REFERENCE_MODELS = ("RegimeSwitchingBootstrapSimulator",
                     "HybridValuationVARSimulator")
 DEFAULT_TAX_REGIME = "pre_tcja_reversion"
+# Ages for P(ruin before age), as in the CLI's default ruin_ages.
+RUIN_AGES = (75, 85, 95)
 
 CellKey = Tuple[str, float, float, str]
 
@@ -82,6 +84,18 @@ class Cell:
         equity_pct = round(self.equity * 100)
         return f"{equity_pct}/{100 - equity_pct}"
 
+    def pct_return(self, q: int, real: bool) -> Optional[float]:
+        """
+        The q-th percentile (5, 10, 25 or 50) total return, real or
+        nominal. None when real is asked of a result that predates real
+        returns.
+        """
+        return getattr(self, f"p{q}_{'real_' if real else ''}return")
+
+    def bands(self, real: bool) -> Optional[dict]:
+        "real_nav_bands or nav_bands; None when the run predates them."
+        return self.real_nav_bands if real else self.nav_bands
+
     def survival(self) -> List[float]:
         """
         P(still solvent at the end of month m) for each month m of the
@@ -89,6 +103,28 @@ class Cell:
         """
         return [1.0 - ruined / self.total_paths
                 for ruined in accumulate(self.ruin_histogram)]
+
+
+def ruin_prob_before(cell: Cell, age: float,
+                     retirement_age: float) -> float:
+    """
+    Unconditional P(ruin before age): the share of all paths ruined
+    before it. Computed from the ruin histogram, so it also works for
+    results that predate the CLI's ruin_prob_by_age, and with the same
+    convention: a ruin in month m happens at age retirement_age + m / 12
+    and counts iff that is before age.
+    """
+    months = math.ceil(round((age - retirement_age) * 12.0, 9))
+    n = min(max(months, 0), len(cell.ruin_histogram))
+    return sum(cell.ruin_histogram[:n]) / cell.total_paths
+
+
+def ruin_ages(retirement_age: float, terminal_age: float) -> List[float]:
+    """
+    The RUIN_AGES inside the horizon. Ages after it would all repeat the
+    overall ruin rate.
+    """
+    return [a for a in RUIN_AGES if retirement_age < a <= terminal_age]
 
 
 def month_to_age(month: Optional[float],

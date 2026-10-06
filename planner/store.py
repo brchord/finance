@@ -43,15 +43,34 @@ _UNHASHED_FIELDS = ("master_seed",)
 
 @dataclass(frozen=True)
 class Profile:
-    "What every run of a review shares; see Review."
+    """
+    What every run of a review shares; see Review. The market assumptions
+    belong here rather than on a run because cells merge across a review's
+    runs: two runs under different assumptions must not be mixed. Their
+    defaults are the engine's (doc/assumptions.md), so reviews created
+    before the fields existed load with the assumptions they ran under.
+    """
     initial_nav: float
     retirement_age: float
     years_to_simulate: float
     tax_regime: str = decision.DEFAULT_TAX_REGIME
+    initial_cape: float = 34.0
+    target_cape: float = 22.0
+    annual_earnings_growth: float = 0.02
+    annual_buyback_yield: float = 0.0
+    dividend_yield: float = 0.01
 
     @property
     def terminal_age(self) -> float:
         return self.retirement_age + self.years_to_simulate
+
+    @property
+    def simulator_params(self) -> dict:
+        "The CLI's simulator_params (constructor kwargs of the models)."
+        return {"initial_cape": self.initial_cape,
+                "target_cape": self.target_cape,
+                "annual_earnings_growth": self.annual_earnings_growth,
+                "annual_buyback_yield": self.annual_buyback_yield}
 
 
 @dataclass(frozen=True)
@@ -163,6 +182,8 @@ def build_config(profile: Profile, sweep: Sweep,
         "weight_increments": sweep.equity_step,
         "total_paths": sweep.total_paths,
         "models": list(sweep.models),
+        "simulator_params": profile.simulator_params,
+        "dividend_yield": profile.dividend_yield,
         # Chunking (and so every chunk's seed) depends on the worker count,
         # so it is part of what makes a run reproducible.
         "workers": workers if workers is not None else os.cpu_count(),

@@ -15,7 +15,8 @@ implementation work in Claude Code.
 - Config (JSON): `initial_nav`, `retirement_age`, `years_to_simulate`,
   `yearly_spending_floor/ceil`, `spend_increments`, `equity_floor/ceil`,
   `weight_increments`, `total_paths`, `models`, `tax_regimes`,
-  `master_seed` (optional), `workers`.
+  `master_seed` (optional), `workers`, and the market assumptions
+  `simulator_params` and `dividend_yield` (doc/assumptions.md).
 - Outputs today: a raw JSON (per-path terminal NAVs, ~230 MB at 50k paths —
   the UI must never read it) and an aggregated JSON with one entry per cell.
 - Ruin timing is tracked in **months since retirement**
@@ -157,8 +158,14 @@ reviews/                          # gitignored
 
 - A **review** is a NAV snapshot at a point in time. It fixes the profile
   shared by all its runs: `initial_nav`, `retirement_age`,
-  `years_to_simulate`, tax regime. The UI enforces this; runs with a
-  different profile belong in a different review.
+  `years_to_simulate`, tax regime, and the market assumptions (starting
+  and long-run CAPE, real earnings growth, net buyback yield, dividend
+  yield). The UI enforces this; runs with a different profile belong in a
+  different review. The assumptions are on the review, not the run,
+  because cells merge across a review's runs; to compare assumptions,
+  create one review per scenario and compare them in History. Reviews
+  created before the assumption fields existed load with the engine's
+  defaults, which are what they ran under.
 - A **run** is one CLI invocation (one sweep). Its folder is keyed by a hash
   of the canonicalized `config.json`, excluding `master_seed`, so re-running
   the same sweep finds the existing run. (`workers` is included: chunking,
@@ -246,8 +253,15 @@ Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
 - `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
 - `ruin_histogram`: monthly counts over the horizon (new)
 - `nav_bands: {years: [0, 1, ...], p5: [], p10: [], p25: [], p50: []}`:
-  real NAV per year since retirement, year 0 = initial NAV, ruined paths
-  counted as 0 (new; `null` for results produced before it existed)
+  **nominal** NAV per year since retirement, year 0 = initial NAV, ruined
+  paths counted as 0 (`null` for results produced before it existed)
+- `real_nav_bands` (same shape) and `p5/p10/p25/p50_real_return`: the
+  same in today's dollars, each path deflated by its own simulated CPI.
+  `p*_return` are nominal.
+- `ruin_prob_by_age: {"75": p, ...}`: unconditional P(ruin before age).
+  The UI computes the same from `ruin_histogram`
+  (`decision.ruin_prob_before`), so it also works for older results.
+- Top level: `assumptions: {dividend_yield, simulator_params}`.
 
 Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 `P(solvent at month m) = 1 - cumsum(ruin_histogram)[m] / total_paths`.
@@ -274,6 +288,9 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
   floor/ceil/step, equity floor/ceil/step, paths. Profile fields come from
   the review. "Run" launches a run (or reuses a cached one); progress shows
   inline.
+- **Display:** today's dollars (default) or nominal, for every return,
+  the fan chart and History. Cells from runs that predate real figures
+  fall back to nominal, with a note.
 - **Controls:** ruin ceiling (default 5%), reference model
   (`RegimeSwitchingBootstrapSimulator` | `HybridValuationVARSimulator`),
   tie tolerances (collapsed by default).
@@ -283,8 +300,11 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
   model, ceiling as a horizontal line, merged across all runs in the
   review. Reference model available as a toggle or a secondary panel.
 - **Ranked table** at a selected spending level (defaults to the max
-  sustainable spending): allocation, ruin %, ruin count, ES10 age, P5, P10,
-  P50, rank explanation, and the reference model's ruin % for context.
+  sustainable spending): allocation, ruin %, ruin count, P(ruin before
+  75/85/95) for the ages inside the horizon, ES10 age, P10, P25, P50,
+  rank explanation, and the reference model's ruin % for context. The
+  ranking still uses ES10 and nominal returns; switching it to the
+  unconditional ruin-by-age and real returns is a separate decision.
 - **"Refine around frontier"**: proposes the next run, editable before
   launching (`planner.decision.propose_refinement`):
   - frontier bracketed → spending from the last passing to the first
@@ -297,8 +317,8 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 
 For a selected (spending, allocation):
 - KPI cards: ruin rate (headline), ES10 and ES5 ruin age, P10 and P50
-  return; minimum ruin age as a small detail. Decision model next to the
-  reference model.
+  return, P(ruin before 75/85/95) inside the horizon; minimum ruin age as
+  a small detail. Decision model next to the reference model.
 - Survival curves: decision and reference on the same axes, the ceiling
   marked.
 - Ruin-age histogram.
@@ -309,7 +329,8 @@ For a selected (spending, allocation):
 
 - Timeline across reviews: max sustainable spending, plus ruin rate and
   ES10 of the chosen cell.
-- Side-by-side diff of two reviews: profile changes and result changes.
+- Side-by-side diff of two reviews: profile changes (including the
+  market assumptions) and result changes.
 - Survival curve overlay of the chosen cell, current vs previous review.
   An upward shift after a good stretch is the signal to consider raising
   spending.

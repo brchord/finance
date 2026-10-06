@@ -15,6 +15,7 @@ if not reviews:
     st.stop()
 
 crit = ui.criteria()
+real = ui.real_dollars()
 
 
 def frontier_of(review: store.Review) -> decision.Frontier:
@@ -41,6 +42,7 @@ for r in reviews:
         "ES10 age": (decision.month_to_age(best.ruin_month_es10,
                                            r.profile.retirement_age)
                      if best else None),
+        "Assumptions": ui.assumptions_caption(r.profile),
     })
 money = st.column_config.NumberColumn(format="$%,.0f")
 st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
@@ -82,19 +84,30 @@ fc, fp = frontiers[current.id], frontiers[previous.id]
 def describe(f: decision.Frontier, review: store.Review) -> dict:
     best = f.best_cell.cell if f.best_cell else None
     p = review.profile
+    r = real and best is not None and best.p10_real_return is not None
+    suffix = "" if best is None or r == real else " (nominal)"
     return {
         "NAV": ui.money(p.initial_nav),
         "Retirement age": f"{p.retirement_age:g}",
         "Terminal age": f"{p.terminal_age:g}",
         "Tax regime": p.tax_regime,
+        "Starting CAPE": f"{p.initial_cape:g}",
+        "Long-run CAPE": f"{p.target_cape:g}",
+        "Earnings growth": f"{p.annual_earnings_growth:.2%}",
+        "Buyback yield": f"{p.annual_buyback_yield:.2%}",
+        "Dividend yield": f"{p.dividend_yield:.2%}",
         "Max spending": ui.money(f.best_spending),
         "Crossing estimate": ui.money(f.estimate),
         "Best allocation": best.allocation if best else "—",
         "P(ruin)": ui.pct(best.ruin_rate) if best else "—",
         "ES10 age": (ui.age(best.ruin_month_es10, p.retirement_age)
                      if best else "—"),
-        "P10 return": ui.total_return(best.p10_return) if best else "—",
-        "P50 return": ui.total_return(best.p50_return) if best else "—",
+        f"P10 return ({ui.dollars_label(real)})":
+            ui.total_return(best.pct_return(10, r)) + suffix
+            if best else "—",
+        f"P50 return ({ui.dollars_label(real)})":
+            ui.total_return(best.pct_return(50, r)) + suffix
+            if best else "—",
     }
 
 

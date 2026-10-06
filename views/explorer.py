@@ -222,18 +222,27 @@ def legend():
         f'<div style="font-size:0.85rem;line-height:2">{swatches}</div>',
         unsafe_allow_html=True,
         help="Ranking steps run in order: ruin rate, ES10 age, P10 return, "
-             "P50 return. A row's shade shows the step that put it ahead of "
-             "the rows below; it was level with the best on every earlier "
-             "step, so a deeper green means it held up on more criteria.")
+             "P50 return (the ranking uses nominal returns, whichever "
+             "dollars are displayed). A row's shade shows the step that put "
+             "it ahead of the rows below; it was level with the best on "
+             "every earlier step, so a deeper green means it held up on "
+             "more criteria.")
 
 
 def ranked_table(level_cells, ref_by_key, crit, review):
     ret_age = review.profile.retirement_age
+    ages = decision.ruin_ages(ret_age, review.profile.terminal_age)
+    # Results from before real returns existed fall back to nominal, for
+    # the whole table so its columns stay comparable.
+    real = ui.real_dollars() and all(c.p10_real_return is not None
+                                     for c in level_cells)
     ranked = decision.rank(level_cells, crit)
     rows = []
     for r in ranked:
         c = r.cell
         ref = ref_by_key.get((c.spending, c.equity))
+        by_age = {f"Ruin <{a}": decision.ruin_prob_before(c, a, ret_age)
+                  * 100 for a in ages}
         rows.append({
             "Rank": r.rank,
             "Allocation": c.allocation,
@@ -242,10 +251,11 @@ def ranked_table(level_cells, ref_by_key, crit, review):
             # Half-width of the 95% confidence interval of P(ruin).
             "±95%": 1.96 * c.ruin_rate_se * 100,
             "Paths": c.total_paths,
+            **by_age,
             "ES10 age": decision.month_to_age(c.ruin_month_es10, ret_age),
-            "P10 return": c.p10_return * 100,
-            "P25 return": c.p25_return * 100,
-            "P50 return": c.p50_return * 100,
+            "P10 return": c.pct_return(10, real) * 100,
+            "P25 return": c.pct_return(25, real) * 100,
+            "P50 return": c.pct_return(50, real) * 100,
             "Ref. P(ruin)": ref.ruin_rate * 100 if ref else None,
         })
     df = pd.DataFrame(rows)
@@ -276,10 +286,19 @@ def ranked_table(level_cells, ref_by_key, crit, review):
                 format="%.1f",
                 help="Mean age at ruin of the earliest 10% of ruined paths."
                      " Empty when no path is ruined."),
-            "P10 return": st.column_config.NumberColumn(format="%+.0f%%"),
-            "P25 return": st.column_config.NumberColumn(format="%+.0f%%"),
-            "P50 return": st.column_config.NumberColumn(format="%+.0f%%"),
+            **{f"Ruin <{a}": st.column_config.NumberColumn(
+                format="%.2f%%",
+                help=f"Share of all paths ruined before age {a}.")
+               for a in ages},
+            **{f"P{q} return": st.column_config.NumberColumn(
+                format="%+.0f%%",
+                help=f"Total return over the horizon, "
+                     f"{ui.dollars_label(real)}.")
+               for q in (10, 25, 50)},
         })
+    if real != ui.real_dollars():
+        st.caption("Returns in nominal dollars: some of these cells come "
+                   "from runs that predate real returns.")
     legend()
     selected = event.selection.rows
     return ranked[selected[0]].cell if selected else None

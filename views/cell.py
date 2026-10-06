@@ -22,6 +22,8 @@ if not cells:
 
 crit = ui.criteria()
 ret_age = review.profile.retirement_age
+real = ui.real_dollars()
+ages = decision.ruin_ages(ret_age, review.profile.terminal_age)
 ref_model = ui.reference_model()
 by_key = {(c.spending, c.equity): c for c in cells}
 ref_by_key = {(c.spending, c.equity): c
@@ -53,20 +55,37 @@ st.caption(f"**{review.label}** · {ui.profile_caption(review.profile)} · "
 
 def kpis(title: str, c: decision.Cell):
     st.markdown(f"**{title}**")
+    # Results from before real returns existed fall back to nominal.
+    r = real and c.p10_real_return is not None
     k = st.columns(5)
     passes = crit.passes(c)
     k[0].metric("P(ruin)", ui.pct(c.ruin_rate),
                 delta="passes" if passes else "fails ceiling",
                 delta_color="normal" if passes else "inverse",
                 delta_arrow="off")
-    k[1].metric("ES10 ruin age", ui.age(c.ruin_month_es10, ret_age))
+    k[1].metric("ES10 ruin age", ui.age(c.ruin_month_es10, ret_age),
+                help="Mean age at ruin of the earliest 10% of ruined "
+                     "paths. Conditional on ruin: it says nothing about "
+                     "how many paths are ruined.")
     k[2].metric("ES5 ruin age", ui.age(c.ruin_month_es5, ret_age))
-    k[3].metric("P10 return", ui.total_return(c.p10_return))
-    k[4].metric("P50 return", ui.total_return(c.p50_return))
+    k[3].metric("P10 return", ui.total_return(c.pct_return(10, r)),
+                help=f"Total return over the horizon, "
+                     f"{ui.dollars_label(r)}.")
+    k[4].metric("P50 return", ui.total_return(c.pct_return(50, r)),
+                help=f"Total return over the horizon, "
+                     f"{ui.dollars_label(r)}.")
+    if ages:
+        k = st.columns(5)
+        for col, a in zip(k, ages):
+            col.metric(f"P(ruin) before {a}",
+                       ui.pct(decision.ruin_prob_before(c, a, ret_age)),
+                       help="Share of all paths ruined before this age.")
+    note = "" if r == real else " (this run predates real returns)"
     st.caption(f"{c.ruin_count:,} ruined paths · earliest ruin at age "
                f"{ui.age(c.ruin_month_min, ret_age)} (a single path; noisy)"
-               f" · P5 return {ui.total_return(c.p5_return)}"
-               f" · P25 return {ui.total_return(c.p25_return)}")
+               f" · P5 return {ui.total_return(c.pct_return(5, r))}"
+               f" · P25 return {ui.total_return(c.pct_return(25, r))}"
+               f" · returns in {ui.dollars_label(r)}{note}")
 
 
 kpis(f"{decision.DECISION_MODEL} (decision)", cell)
@@ -99,15 +118,23 @@ else:
     tabs = st.tabs([name for name, _ in fan_models])
     for tab, (name, c) in zip(tabs, fan_models):
         with tab:
-            if c.nav_bands is None:
+            r = real and c.real_nav_bands is not None
+            bands = c.bands(r)
+            if bands is None:
                 st.write("Not available for this run.")
                 continue
+            if r != real:
+                st.caption("This run predates real NAV percentiles; "
+                           "showing nominal dollars.")
             st.plotly_chart(charts.fan_chart(
-                c.nav_bands, ret_age, review.profile.initial_nav, theme,
-                log_scale), theme="streamlit")
-    st.caption("Real (inflation-adjusted) NAV. Only the median and below "
-               "are shown: upside is captured by recalibrating at the next "
-               "review.")
+                bands, ret_age, review.profile.initial_nav, theme,
+                log_scale, y_title=f"NAV ({ui.dollars_label(r)})"),
+                theme="streamlit")
+    st.caption(("Today's dollars: each path deflated by its own simulated "
+                "inflation." if real else
+                "Nominal dollars of each year: not adjusted for inflation.")
+               + " Only the median and below are shown: upside is captured "
+               "by recalibrating at the next review.")
 
 st.subheader("Age at ruin")
 if cell.ruin_count == 0:

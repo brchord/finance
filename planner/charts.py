@@ -190,10 +190,12 @@ def spending_timeline(dates: Sequence[str], values: Sequence[Optional[float]],
 
 
 def fan_chart(bands: dict, retirement_age: float, initial_nav: float,
-              theme: Theme, log_scale: bool = False) -> go.Figure:
+              theme: Theme, log_scale: bool = False,
+              y_title: str = "NAV (nominal $)") -> go.Figure:
     """
-    Per-year NAV percentile bands (MonteCarloCLI aggregated "nav_bands"):
-    nested P5-P10, P10-P25 and P25-P50 fills and the median line.
+    Per-year NAV percentile bands (MonteCarloCLI aggregated "nav_bands" or
+    "real_nav_bands"): nested P5-P10, P10-P25 and P25-P50 fills and the
+    median line.
     """
     ages = [retirement_age + y for y in bands["years"]]
     fig = go.Figure()
@@ -221,7 +223,7 @@ def fan_chart(bands: dict, retirement_age: float, initial_nav: float,
                   annotation_position="bottom right",
                   annotation_font_color=theme.muted)
     fig.update_xaxes(title_text="Age")
-    fig.update_yaxes(title_text="NAV (real $)", tickprefix="$",
+    fig.update_yaxes(title_text=y_title, tickprefix="$",
                      tickformat="~s", type="log" if log_scale else "linear",
                      # Linear starts at $0 so the distance to ruin shows.
                      rangemode="normal" if log_scale else "tozero")

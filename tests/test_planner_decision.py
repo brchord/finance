@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 
@@ -283,3 +284,51 @@ class TestRefinement:
 
     def test_empty(self):
         assert d.propose_refinement([], self.criteria, 10_000, 0.1) is None
+
+
+class TestRuinByAge:
+    @pytest.mark.parametrize("retirement_age", [60, 60.5, 42.25])
+    def test_matches_the_cli(self, retirement_age):
+        # Same convention as monte_carlo.ruin_probability_by_age, which
+        # writes ruin_prob_by_age into newer results.
+        import numpy as np
+        import monte_carlo
+        rng = np.random.default_rng(1)
+        histogram = rng.integers(0, 3, 240).astype(float)
+        c = cell(histogram=list(histogram), paths=1_000)
+        ages = [retirement_age - 1, retirement_age, retirement_age + 1 / 12,
+                retirement_age + 7.5, 75, 85, 200]
+        expected = monte_carlo.ruin_probability_by_age(
+            histogram, 1_000, retirement_age, ages)
+        for a in ages:
+            assert d.ruin_prob_before(c, a, retirement_age) == (
+                pytest.approx(expected[f"{a:g}"])), a
+
+    def test_agrees_with_survival(self):
+        c = cell(histogram=[0, 2, 0, 5, 1, 0], paths=20)
+        survival = c.survival()
+        for n in range(1, 7):
+            assert d.ruin_prob_before(c, 60 + n / 12, 60) == (
+                pytest.approx(1 - survival[n - 1]))
+
+    def test_ages_inside_the_horizon(self):
+        assert d.ruin_ages(42, 105) == [75, 85, 95]
+        assert d.ruin_ages(68, 78) == [75]
+        assert d.ruin_ages(75, 90) == [85]  # retirement age itself is out
+        assert d.ruin_ages(60, 70) == []
+
+
+class TestDollars:
+    def test_real_or_nominal(self):
+        c = dataclasses.replace(cell(p10=1.0), p10_real_return=0.4,
+                                real_nav_bands={"p50": [2]},
+                                nav_bands={"p50": [3]})
+        assert (c.pct_return(10, False), c.pct_return(10, True)) == (1.0,
+                                                                     0.4)
+        assert c.bands(True) == {"p50": [2]}
+        assert c.bands(False) == {"p50": [3]}
+
+    def test_missing_real_is_none(self):
+        c = cell()
+        assert c.pct_return(50, True) is None
+        assert c.bands(True) is None
