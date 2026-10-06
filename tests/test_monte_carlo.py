@@ -39,8 +39,13 @@ def cli(tmp_path_factory, market_cache):
 
 
 def comparable(raw):
-    """Raw results minus wall-clock timings."""
-    return {k: v for k, v in raw.items() if k != "perf_data"}
+    """
+    Raw results minus wall-clock timings, with the per-path arrays as
+    lists so results compare with ==.
+    """
+    return json.loads(json.dumps(
+        {k: v for k, v in raw.items() if k != "perf_data"},
+        default=mc._raw_json_default))
 
 
 class TestMCConfig:
@@ -166,8 +171,9 @@ class TestRun:
                 assert taxed["tax_regime"] == "current_law_indexed"
                 assert (untaxed["spending"], untaxed["equity"]) == (
                     taxed["spending"], taxed["equity"])
-                assert (untaxed["results"]["Terminal SPX"]
-                        == taxed["results"]["Terminal SPX"])
+                np.testing.assert_array_equal(
+                    untaxed["results"]["Terminal SPX"],
+                    taxed["results"]["Terminal SPX"])
 
     def test_taxes_do_not_raise_average_terminal_wealth(self, cli):
         for sims in cli.raw_results["simulations"].values():
@@ -197,6 +203,42 @@ class TestRun:
         # reports once per cell, covering both regime variants at once.
         step = 1 if backend == "process" else 2
         assert calls == [(done, 16) for done in range(step, 17, step)]
+
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_collected_results_are_released(
+            self, backend, tmp_path, market_cache, monkeypatch):
+        # Every cell's futures used to stay referenced until the end of the
+        # run, and a finished future keeps its result: at 25k paths that
+        # held ~2.6 GB of per-year NAVs in the parent. Once a cell has been
+        # collected, its futures must be released.
+        import gc
+        import weakref
+        futures = weakref.WeakSet()
+        original_submit = mc.ProcessPoolExecutor.submit
+
+        def tracking_submit(executor, *args, **kwargs):
+            future = original_submit(executor, *args, **kwargs)
+            futures.add(future)
+            return future
+
+        alive_at_end = []
+
+        def progress(done, total):
+            if done == total:
+                gc.collect()
+                alive_at_end.append(len(futures))
+
+        monkeypatch.setattr(mc.ProcessPoolExecutor, "submit",
+                            tracking_submit)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": ALL_MODELS[:2], "total_paths": 4}))
+        cli = mc.MonteCarloCLI(str(config_file), str(market_cache),
+                               progress_callback=progress)
+        cli.run(backend=backend)
+        # 16 portfolios (8 cells) x 2 chunks were submitted; only the last
+        # portfolio's (process) or cell's (numba) chunks may remain.
+        assert alive_at_end == [SWEEP["workers"]]
 
     def test_fewer_paths_than_workers_completes(
             self, tmp_path, market_cache, call_with_timeout):
@@ -353,6 +395,45 @@ class TestCommandLine:
         assert sorted(f.name for f in tmp_path.iterdir()) == [
             "config.json", "meta.json", "results.json", "status.json"]
 
+    def test_queue_lock_flag(self, monkeypatch):
+        self.set_command_line(monkeypatch, ["--job-dir", "runs/abc",
+                                            "--queue-lock", "q.lock"])
+        assert mc.parse_args().queue_lock == "q.lock"
+        self.set_command_line(monkeypatch, ["--job-dir", "runs/abc"])
+        assert mc.parse_args().queue_lock is None
+
+    def test_job_waits_in_the_queue(self, tmp_path, market_cache):
+        import subprocess
+        import time
+        config = {**SWEEP, "models": [ALL_MODELS[0]], "total_paths": 4}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        lock = tmp_path / "queue.lock"
+        status_file = tmp_path / job_files.STATUS_FILE
+
+        def state():
+            status = job_files.read_json(status_file)
+            return status and status["state"]
+
+        with job_files.run_lock(lock):  # another run holds the queue
+            proc = subprocess.Popen(
+                [sys.executable, str(Path(mc.__file__)),
+                 "--job-dir", str(tmp_path), "-m", str(market_cache),
+                 "--backend", "numba", "--queue-lock", str(lock)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.monotonic() + 60
+            while state() != job_files.QUEUED:
+                assert time.monotonic() < deadline, "never queued"
+                time.sleep(0.1)
+            time.sleep(1.0)
+            # Still waiting: nothing simulated, nothing written.
+            assert state() == job_files.QUEUED
+            assert not (tmp_path / job_files.META_FILE).exists()
+        assert proc.wait(timeout=120) == 0
+        status = job_files.read_json(status_file)
+        assert status["state"] == job_files.SUCCEEDED
+        assert status["queued_at"] <= status["started_at"]
+        assert (tmp_path / job_files.RESULTS_FILE).exists()
+
     def test_main_with_job_dir_records_failure(
             self, tmp_path, market_cache, monkeypatch):
         config = {**SWEEP, "models": ["NoSuchModel"], "total_paths": 4}
@@ -505,7 +586,8 @@ class TestAssumptions:
                                ("RawBlockBootstrapSimulator", False)):
             a = base.raw_results["simulations"][model][0]["results"]
             b = bought.raw_results["simulations"][model][0]["results"]
-            assert (a["Terminal SPX"] != b["Terminal SPX"]) is changed, model
+            assert (not np.array_equal(a["Terminal SPX"],
+                                       b["Terminal SPX"])) is changed, model
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_dividend_yield_reaches_the_strategy(
@@ -517,7 +599,8 @@ class TestAssumptions:
         model = "RawBlockBootstrapSimulator"
         a = low.raw_results["simulations"][model][0]["results"]
         b = high.raw_results["simulations"][model][0]["results"]
-        assert a["Terminal SPX"] == b["Terminal SPX"]  # same markets
+        np.testing.assert_array_equal(a["Terminal SPX"],
+                                      b["Terminal SPX"])  # same markets
         assert np.mean(b["Terminal NAV"]) > np.mean(a["Terminal NAV"])
 
     def test_unknown_simulator_param_is_rejected(
@@ -624,8 +707,8 @@ class TestRealMetrics:
                       models=["RawBlockBootstrapSimulator"])
         for sim in cli.raw_results["simulations"][
                 "RawBlockBootstrapSimulator"]:
-            assert (sim["results"]["Terminal Real NAV"]
-                    == sim["results"]["Terminal NAV"])
+            np.testing.assert_array_equal(sim["results"]["Terminal Real NAV"],
+                                          sim["results"]["Terminal NAV"])
             assert sim["real_nav_bands"] == sim["nav_bands"]
         for entry in cli.agg_results["results"][
                 "RawBlockBootstrapSimulator"]:

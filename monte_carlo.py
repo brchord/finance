@@ -16,9 +16,10 @@ import os
 import time
 import traceback
 
+from collections import deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -685,6 +686,9 @@ class MonteCarloCLI:
         """
         Starts the simulation, collects results and stores them into a
         dictionary for further serialization and/or aggreggation analysis.
+        In self.raw_results, each portfolio's per-path "results" ("Terminal
+        SPX", "Terminal NAV", "Terminal Real NAV") are numpy arrays; the
+        raw output file writes them as lists.
 
         Parameters:
         -----------
@@ -767,7 +771,11 @@ class MonteCarloCLI:
         # previous ones), so workers never idle waiting on the slowest chunk
         # of a portfolio or on serial setup. Results are collected in
         # portfolio order, so output is identical to running them one by one.
-        pending = []
+        # Each entry is popped once collected: a finished future keeps its
+        # result (and mc its fitted simulator) alive for as long as it is
+        # referenced.
+        pending: Deque[Tuple[dict, MonteCarloEngine, List[Future]]] = (
+            deque())
         done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for p in portfolios:
@@ -803,7 +811,8 @@ class MonteCarloCLI:
                 pending.append((p, mc, futures))
                 i += 1
 
-            for p, mc, futures in pending:
+            while pending:
+                p, mc, futures = pending.popleft()
                 model_name = p["model"]
                 # Time spent blocked waiting on this portfolio's results;
                 # simulation itself overlaps with other portfolios' setup.
@@ -816,10 +825,13 @@ class MonteCarloCLI:
                     sim_end - sim_start)
 
                 data_start = time.perf_counter()
+                # Per-path values stay numpy arrays (8 bytes a value, vs
+                # ~32 as a list of floats) until the raw file is written;
+                # see _raw_json_default.
                 run_output = {
-                        "Terminal SPX": spx.tolist(),
-                        "Terminal NAV": nav.tolist(),
-                        "Terminal Real NAV": (nav / terminal_levels).tolist(),
+                        "Terminal SPX": spx,
+                        "Terminal NAV": nav,
+                        "Terminal Real NAV": nav / terminal_levels,
                 }
                 results["simulations"][model_name].append({
                     "spending": p["yearly_spending"],
@@ -943,7 +955,10 @@ class MonteCarloCLI:
         # One pool for the whole run, every cell's chunks submitted up
         # front (so workers never idle waiting on the slowest chunk of a
         # cell or on serial setup), collected in cell order afterward.
-        pending = []
+        # Each cell is popped once collected: its finished futures hold
+        # every path's per-year NAVs and price levels (~24 MB per cell at
+        # 25k paths), which would otherwise stay alive for the whole run.
+        pending: Deque[Tuple[Tuple, List[dict], List[Future]]] = deque()
         done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for cell_idx, (cell_key, portfolios) in enumerate(cells):
@@ -984,7 +999,8 @@ class MonteCarloCLI:
                     setup_end - setup_start)
                 pending.append((cell_key, portfolios, chunk_futures))
 
-            for cell_key, portfolios, chunk_futures in pending:
+            while pending:
+                cell_key, portfolios, chunk_futures = pending.popleft()
                 model_name = cell_key[0]
                 sim_start = time.perf_counter()
                 # Submission order, not completion order -- same
@@ -1025,11 +1041,12 @@ class MonteCarloCLI:
                         "nav_bands": nav_bands(annual_navs),
                         "real_nav_bands": nav_bands(
                             annual_navs / annual_levels),
+                        # numpy arrays, as in backend="process"; the
+                        # cell's regime variants share final_spx.
                         "results": {
-                            "Terminal SPX": final_spx.tolist(),
-                            "Terminal NAV": final_navs.tolist(),
-                            "Terminal Real NAV": (
-                                final_navs / terminal_levels).tolist(),
+                            "Terminal SPX": final_spx,
+                            "Terminal NAV": final_navs,
+                            "Terminal Real NAV": final_navs / terminal_levels,
                         },
                     })
                 data_end = time.perf_counter()
@@ -1162,6 +1179,14 @@ def parse_args():
                              "into it. -c and -o override the config and "
                              "results paths",
                         dest="job_dir")
+    parser.add_argument("-q", "--queue-lock",
+                        help="Run queue: wait for an exclusive lock on this "
+                             "file before simulating, so runs sharing it run "
+                             "one at a time (each already uses every "
+                             "worker; concurrent runs only add memory). "
+                             f"With --job-dir, {job_files.STATUS_FILE} says "
+                             f"'{job_files.QUEUED}' while waiting",
+                        dest="queue_lock")
     parser.add_argument("-m", "--market-cache-file",
                         help="Specifies an alternative parquet market data "
                              "cache file",
@@ -1211,11 +1236,22 @@ def _write_meta(job_dir: Path, args):
     })
 
 
+def _raw_json_default(value):
+    """
+    json.dump fallback for raw_results, whose per-path "results" values are
+    numpy arrays in memory: written as lists, exactly as before.
+    """
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
 def _run_and_save(cli: MonteCarloCLI, args):
     cli.run(backend=args.backend)
     if args.raw_output_filename is not None:
         with open(args.raw_output_filename, "w", encoding="utf-8") as f:
-            json.dump(cli.raw_results, f, indent=4)
+            json.dump(cli.raw_results, f, indent=4,
+                      default=_raw_json_default)
 
     cli.aggregate()
     job_files.write_json_atomic(
@@ -1230,18 +1266,25 @@ def main():
         level=logging.INFO)
     args = parse_args()
 
+    lock = Path(args.queue_lock) if args.queue_lock is not None else None
     if args.job_dir is None:
         cli = MonteCarloCLI(args.config_filename, args.market_data_filename)
-        _run_and_save(cli, args)
+        with job_files.run_lock(lock):
+            _run_and_save(cli, args)
         return
 
     job_dir = Path(args.job_dir)
-    status = job_files.StatusWriter(job_dir, pid=os.getpid())
+    status = job_files.StatusWriter(job_dir, pid=os.getpid(),
+                                    queued=lock is not None)
     try:
-        _write_meta(job_dir, args)
-        cli = MonteCarloCLI(args.config_filename, args.market_data_filename,
-                            progress_callback=status.progress)
-        _run_and_save(cli, args)
+        with job_files.run_lock(lock):
+            if lock is not None:
+                status.start()
+            _write_meta(job_dir, args)
+            cli = MonteCarloCLI(args.config_filename,
+                                args.market_data_filename,
+                                progress_callback=status.progress)
+            _run_and_save(cli, args)
     except BaseException as exc:
         status.failed(
             "".join(traceback.format_exception_only(exc)).strip())

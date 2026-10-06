@@ -15,6 +15,7 @@ SWEEP_KEYS = ("sp_floor", "sp_ceil", "sp_step", "eq_floor", "eq_ceil",
               "eq_step", "paths")
 PENDING_SWEEP = "_pending_sweep"
 SWEEP_REVIEW = "_sweep_review_id"
+PENDING_TOAST = "_pending_toast"
 ACTIVE_RUNS = "_active_run_ids"
 
 
@@ -98,11 +99,18 @@ def sweep_form(review: store.Review):
             spending_step=s.sp_step, equity_floor=s.eq_floor / 100,
             equity_ceil=s.eq_ceil / 100, equity_step=s.eq_step / 100,
             total_paths=int(s.paths), models=models)
+        busy = bool(store.active_runs())
         run = store.launch(review, sweep)
         if run.state == job_files.SUCCEEDED:
             st.toast("This sweep already ran in this review; its results "
                      "are already included.")
         else:
+            if busy:
+                # Shown after the rerun (a toast doesn't survive it).
+                s[PENDING_TOAST] = (
+                    "Queued: runs go one at a time (each already uses "
+                    "every core), so this one starts when the current "
+                    "run finishes.")
             st.rerun()
 
 
@@ -121,7 +129,9 @@ def active_runs(review: store.Review):
         label = (f"{ui.md_money(sw.spending_floor)}–{ui.md_money(sw.spending_ceil)}"
                  f" · {sw.equity_floor:.0%}–{sw.equity_ceil:.0%} equity · "
                  f"{sw.total_paths:,} paths")
-        if run.status:
+        if run.state == job_files.QUEUED:
+            label += " — queued: starts when the run in progress finishes"
+        elif run.status:
             label += (f" — {run.status['cells_done']}/"
                       f"{run.status['cells_total'] or '?'} cells")
         c1.progress(run.progress, text=label)
@@ -352,8 +362,11 @@ def runs_list(review: store.Review):
             st.write("None yet.")
         for run in runs:
             sw = run.sweep
+            when = (f"queued {run.queued_at}"
+                    if run.started_at is None and run.queued_at
+                    else f"started {run.started_at or '—'}")
             st.markdown(
-                f"**{run.state}** · started {run.started_at or '—'} · "
+                f"**{run.state}** · {when} · "
                 f"{ui.md_money(sw.spending_floor)}–{ui.md_money(sw.spending_ceil)}"
                 f" by {ui.md_money(sw.spending_step)} · "
                 f"{sw.equity_floor:.0%}–{sw.equity_ceil:.0%} by "
@@ -378,6 +391,8 @@ if review is None:
     st.stop()
 
 st.caption(f"**{review.label}** · {ui.profile_caption(review.profile)}")
+if PENDING_TOAST in st.session_state:
+    st.toast(st.session_state.pop(PENDING_TOAST))
 init_sweep_state(review)
 merged = ui.merged_cells(review)
 has_results = bool(merged)

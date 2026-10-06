@@ -242,15 +242,24 @@ reviews/                          # gitignored
 Runs are much shorter now, so job tracking is deliberately light:
 
 - **Launch:** UI writes `config.json`, then starts
-  `monte_carlo.py --job-dir <run_dir> --backend numba` with
+  `monte_carlo.py --job-dir <run_dir> --backend numba --queue-lock
+  <reviews root>/.run-queue.lock` with
   `subprocess.Popen(..., start_new_session=True)`, stdout/stderr to
   `log.txt`.
+- **Queue:** runs execute one at a time. Each already uses every core, so
+  running two at once doesn't finish sooner; it only doubles the memory
+  (a 50k-path sweep peaks at ~3.8 GB on a 7.7 GB machine). The CLI waits
+  for an exclusive `flock` on the queue file before simulating, with
+  `state: "queued"`; the OS releases the lock when a run exits, even if
+  it crashes or is killed. Living in the CLI, the queue works with the UI
+  closed. Waiting runs aren't guaranteed to start in launch order.
 - **Progress:** progress bar from `status.json`, polled with
   `st.fragment(run_every=2)` while a run is active. Shown inline on the
   explorer page; there is no separate monitor page.
 - **Cancel:** kill the process group by PID (SIGTERM) and mark the run
-  `cancelled`.
-- **Stale detection:** `state == "running"` but the PID is gone → failed.
+  `cancelled`; works the same on a queued run.
+- **Stale detection:** `state` is `queued` or `running` but the PID is
+  gone → failed.
   A run with `config.json` but no `status.json` is "starting" for 60 s,
   then failed.
 
@@ -262,15 +271,18 @@ Runs are much shorter now, so job tracking is deliberately light:
   "pid": 12345,
   "cells_done": 21,
   "cells_total": 54,
+  "queued_at": "2026-10-02T19:01:50",
   "started_at": "2026-10-02T19:02:11",
   "updated_at": "2026-10-02T19:02:40",
   "error": null
 }
 ```
 
-`state` is one of `running`, `succeeded`, `failed` (with `error`), or
-`cancelled` (written by the UI). `cells_done`/`cells_total` count
-portfolios, i.e. aggregated result entries.
+`state` is one of `queued`, `running`, `succeeded`, `failed` (with
+`error`), or `cancelled` (written by the UI). `queued_at` is null for a
+run that didn't wait in a queue; `started_at` is null while queued.
+`cells_done`/`cells_total` count portfolios, i.e. aggregated result
+entries.
 
 ## Required CLI / engine changes
 
