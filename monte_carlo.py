@@ -16,9 +16,10 @@ import os
 import time
 import traceback
 
+from collections import deque
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -767,7 +768,11 @@ class MonteCarloCLI:
         # previous ones), so workers never idle waiting on the slowest chunk
         # of a portfolio or on serial setup. Results are collected in
         # portfolio order, so output is identical to running them one by one.
-        pending = []
+        # Each entry is popped once collected: a finished future keeps its
+        # result (and mc its fitted simulator) alive for as long as it is
+        # referenced.
+        pending: Deque[Tuple[dict, MonteCarloEngine, List[Future]]] = (
+            deque())
         done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for p in portfolios:
@@ -803,7 +808,8 @@ class MonteCarloCLI:
                 pending.append((p, mc, futures))
                 i += 1
 
-            for p, mc, futures in pending:
+            while pending:
+                p, mc, futures = pending.popleft()
                 model_name = p["model"]
                 # Time spent blocked waiting on this portfolio's results;
                 # simulation itself overlaps with other portfolios' setup.
@@ -943,7 +949,10 @@ class MonteCarloCLI:
         # One pool for the whole run, every cell's chunks submitted up
         # front (so workers never idle waiting on the slowest chunk of a
         # cell or on serial setup), collected in cell order afterward.
-        pending = []
+        # Each cell is popped once collected: its finished futures hold
+        # every path's per-year NAVs and price levels (~24 MB per cell at
+        # 25k paths), which would otherwise stay alive for the whole run.
+        pending: Deque[Tuple[Tuple, List[dict], List[Future]]] = deque()
         done = 0
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for cell_idx, (cell_key, portfolios) in enumerate(cells):
@@ -984,7 +993,8 @@ class MonteCarloCLI:
                     setup_end - setup_start)
                 pending.append((cell_key, portfolios, chunk_futures))
 
-            for cell_key, portfolios, chunk_futures in pending:
+            while pending:
+                cell_key, portfolios, chunk_futures = pending.popleft()
                 model_name = cell_key[0]
                 sim_start = time.perf_counter()
                 # Submission order, not completion order -- same

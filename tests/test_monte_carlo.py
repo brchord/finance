@@ -198,6 +198,42 @@ class TestRun:
         step = 1 if backend == "process" else 2
         assert calls == [(done, 16) for done in range(step, 17, step)]
 
+    @pytest.mark.parametrize("backend", ["process", "numba"])
+    def test_collected_results_are_released(
+            self, backend, tmp_path, market_cache, monkeypatch):
+        # Every cell's futures used to stay referenced until the end of the
+        # run, and a finished future keeps its result: at 25k paths that
+        # held ~2.6 GB of per-year NAVs in the parent. Once a cell has been
+        # collected, its futures must be released.
+        import gc
+        import weakref
+        futures = weakref.WeakSet()
+        original_submit = mc.ProcessPoolExecutor.submit
+
+        def tracking_submit(executor, *args, **kwargs):
+            future = original_submit(executor, *args, **kwargs)
+            futures.add(future)
+            return future
+
+        alive_at_end = []
+
+        def progress(done, total):
+            if done == total:
+                gc.collect()
+                alive_at_end.append(len(futures))
+
+        monkeypatch.setattr(mc.ProcessPoolExecutor, "submit",
+                            tracking_submit)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps(
+            {**SWEEP, "models": ALL_MODELS[:2], "total_paths": 4}))
+        cli = mc.MonteCarloCLI(str(config_file), str(market_cache),
+                               progress_callback=progress)
+        cli.run(backend=backend)
+        # 16 portfolios (8 cells) x 2 chunks were submitted; only the last
+        # portfolio's (process) or cell's (numba) chunks may remain.
+        assert alive_at_end == [SWEEP["workers"]]
+
     def test_fewer_paths_than_workers_completes(
             self, tmp_path, market_cache, call_with_timeout):
         # Used to hang forever: 3 // 4 == 0 paths per chunk.
