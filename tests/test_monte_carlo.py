@@ -39,8 +39,13 @@ def cli(tmp_path_factory, market_cache):
 
 
 def comparable(raw):
-    """Raw results minus wall-clock timings."""
-    return {k: v for k, v in raw.items() if k != "perf_data"}
+    """
+    Raw results minus wall-clock timings, with the per-path arrays as
+    lists so results compare with ==.
+    """
+    return json.loads(json.dumps(
+        {k: v for k, v in raw.items() if k != "perf_data"},
+        default=mc._raw_json_default))
 
 
 class TestMCConfig:
@@ -166,8 +171,9 @@ class TestRun:
                 assert taxed["tax_regime"] == "current_law_indexed"
                 assert (untaxed["spending"], untaxed["equity"]) == (
                     taxed["spending"], taxed["equity"])
-                assert (untaxed["results"]["Terminal SPX"]
-                        == taxed["results"]["Terminal SPX"])
+                np.testing.assert_array_equal(
+                    untaxed["results"]["Terminal SPX"],
+                    taxed["results"]["Terminal SPX"])
 
     def test_taxes_do_not_raise_average_terminal_wealth(self, cli):
         for sims in cli.raw_results["simulations"].values():
@@ -541,7 +547,8 @@ class TestAssumptions:
                                ("RawBlockBootstrapSimulator", False)):
             a = base.raw_results["simulations"][model][0]["results"]
             b = bought.raw_results["simulations"][model][0]["results"]
-            assert (a["Terminal SPX"] != b["Terminal SPX"]) is changed, model
+            assert (not np.array_equal(a["Terminal SPX"],
+                                       b["Terminal SPX"])) is changed, model
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_dividend_yield_reaches_the_strategy(
@@ -553,7 +560,8 @@ class TestAssumptions:
         model = "RawBlockBootstrapSimulator"
         a = low.raw_results["simulations"][model][0]["results"]
         b = high.raw_results["simulations"][model][0]["results"]
-        assert a["Terminal SPX"] == b["Terminal SPX"]  # same markets
+        np.testing.assert_array_equal(a["Terminal SPX"],
+                                      b["Terminal SPX"])  # same markets
         assert np.mean(b["Terminal NAV"]) > np.mean(a["Terminal NAV"])
 
     def test_unknown_simulator_param_is_rejected(
@@ -660,8 +668,8 @@ class TestRealMetrics:
                       models=["RawBlockBootstrapSimulator"])
         for sim in cli.raw_results["simulations"][
                 "RawBlockBootstrapSimulator"]:
-            assert (sim["results"]["Terminal Real NAV"]
-                    == sim["results"]["Terminal NAV"])
+            np.testing.assert_array_equal(sim["results"]["Terminal Real NAV"],
+                                          sim["results"]["Terminal NAV"])
             assert sim["real_nav_bands"] == sim["nav_bands"]
         for entry in cli.agg_results["results"][
                 "RawBlockBootstrapSimulator"]:

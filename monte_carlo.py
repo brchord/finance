@@ -686,6 +686,9 @@ class MonteCarloCLI:
         """
         Starts the simulation, collects results and stores them into a
         dictionary for further serialization and/or aggreggation analysis.
+        In self.raw_results, each portfolio's per-path "results" ("Terminal
+        SPX", "Terminal NAV", "Terminal Real NAV") are numpy arrays; the
+        raw output file writes them as lists.
 
         Parameters:
         -----------
@@ -822,10 +825,13 @@ class MonteCarloCLI:
                     sim_end - sim_start)
 
                 data_start = time.perf_counter()
+                # Per-path values stay numpy arrays (8 bytes a value, vs
+                # ~32 as a list of floats) until the raw file is written;
+                # see _raw_json_default.
                 run_output = {
-                        "Terminal SPX": spx.tolist(),
-                        "Terminal NAV": nav.tolist(),
-                        "Terminal Real NAV": (nav / terminal_levels).tolist(),
+                        "Terminal SPX": spx,
+                        "Terminal NAV": nav,
+                        "Terminal Real NAV": nav / terminal_levels,
                 }
                 results["simulations"][model_name].append({
                     "spending": p["yearly_spending"],
@@ -1035,11 +1041,12 @@ class MonteCarloCLI:
                         "nav_bands": nav_bands(annual_navs),
                         "real_nav_bands": nav_bands(
                             annual_navs / annual_levels),
+                        # numpy arrays, as in backend="process"; the
+                        # cell's regime variants share final_spx.
                         "results": {
-                            "Terminal SPX": final_spx.tolist(),
-                            "Terminal NAV": final_navs.tolist(),
-                            "Terminal Real NAV": (
-                                final_navs / terminal_levels).tolist(),
+                            "Terminal SPX": final_spx,
+                            "Terminal NAV": final_navs,
+                            "Terminal Real NAV": final_navs / terminal_levels,
                         },
                     })
                 data_end = time.perf_counter()
@@ -1221,11 +1228,22 @@ def _write_meta(job_dir: Path, args):
     })
 
 
+def _raw_json_default(value):
+    """
+    json.dump fallback for raw_results, whose per-path "results" values are
+    numpy arrays in memory: written as lists, exactly as before.
+    """
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
 def _run_and_save(cli: MonteCarloCLI, args):
     cli.run(backend=args.backend)
     if args.raw_output_filename is not None:
         with open(args.raw_output_filename, "w", encoding="utf-8") as f:
-            json.dump(cli.raw_results, f, indent=4)
+            json.dump(cli.raw_results, f, indent=4,
+                      default=_raw_json_default)
 
     cli.aggregate()
     job_files.write_json_atomic(
