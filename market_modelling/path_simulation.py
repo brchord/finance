@@ -322,6 +322,7 @@ class ValuationAdjustedVARSimulator(PathSimulator):
         valuation_drag_coef: float = 0.015,
         annual_earnings_growth: float = 0.02,
         rate_reversion_speed: float = 0.15,
+        initial_cape: float = 34.0,
         target_yield_3m: Optional[float] = None,
         target_yield_5y: Optional[float] = None,
     ):
@@ -378,7 +379,7 @@ class ValuationAdjustedVARSimulator(PathSimulator):
         self.coefficient_matrix: Optional[np.ndarray] = None
         self.residual_cov_matrix: Optional[np.ndarray] = None
         self.historical_seed_matrix: Optional[np.ndarray] = None
-        self.initial_cape: float = 34.0
+        self.initial_cape: float = initial_cape
         self.initial_spx_level: Optional[float] = None
         self.initial_cpi_level: Optional[float] = None
         self.initial_yield_3m: Optional[float] = None
@@ -393,7 +394,7 @@ class ValuationAdjustedVARSimulator(PathSimulator):
         self,
         returns_data: pd.DataFrame,
         levels_data: pd.DataFrame,
-        initial_cape: float = 34.0,
+        initial_cape: Optional[float] = None,
     ) -> None:
         """
         Parameters:
@@ -402,12 +403,13 @@ class ValuationAdjustedVARSimulator(PathSimulator):
             Monthly increments matrix.
         levels_data : pd.DataFrame
             Monthly levels matrix.
-        initial_cape : float, default=34.0
-            Spot Shiller CAPE ratio at the start of simulation.
-            Calibration Range: Query current Yale/Shiller dataset (typically
-                               25.0 to 38.0).
+        initial_cape : float, optional
+            Starting Shiller CAPE. Defaults to the value given to the
+            constructor (see __init__), so a configured value is no longer
+            silently replaced by a hard-coded default here.
         """
-        self.initial_cape = initial_cape
+        if initial_cape is not None:
+            self.initial_cape = initial_cape
         increment_matrix = returns_data.values
         total_observations, _ = increment_matrix.shape
         p = self.lag_order
@@ -557,6 +559,8 @@ class HybridValuationVARSimulator(PathSimulator):
         rate_reversion_speed: float = 0.15,
         target_yield_3m: Optional[float] = None,
         target_yield_5y: Optional[float] = None,
+        initial_cape: float = 34.0,
+        annual_buyback_yield: float = 0.0,
     ):
         """
         Parameters & Calibration Ranges:
@@ -597,6 +601,22 @@ class HybridValuationVARSimulator(PathSimulator):
             Long-run equilibrium yield levels used as the reversion anchor.
             If None (default), estimated from the historical sample mean at
             fit() time.
+
+        initial_cape : float, default=34.0
+            Spot Shiller CAPE at the start of the simulation. Set it to the
+            current value (Yale/Shiller dataset) for every run -- the
+            valuation drag is driven by the gap between this and
+            target_cape. Can also be passed to fit(), which takes
+            precedence.
+
+        annual_buyback_yield : float, default=0.0
+            Net share-repurchase yield added to the real per-share price
+            drift: aggregate earnings growth (annual_earnings_growth) only
+            becomes per-share growth after net buybacks shrink the share
+            count. The default of 0 reproduces the original model, whose
+            only cash return to shareholders is the strategy's dividend
+            yield. Calibration Range: 0.0 to 0.02 (US net buyback yield has
+            run roughly 1-2% since the mid-2000s).
         """
         self.lag_order = lag_order
         self.residual_block_size = residual_block_size
@@ -604,6 +624,7 @@ class HybridValuationVARSimulator(PathSimulator):
         self.phi_cape = cape_reversion_speed
         self.gamma_cape = valuation_drag_coef
         self.earnings_growth = annual_earnings_growth
+        self.buyback_yield = annual_buyback_yield
         self.phi_rate = rate_reversion_speed
         self.target_yield_3m = target_yield_3m
         self.target_yield_5y = target_yield_5y
@@ -613,7 +634,7 @@ class HybridValuationVARSimulator(PathSimulator):
         self.historical_seed_matrix: Optional[np.ndarray] = None
         self.historical_mean_returns: Optional[np.ndarray] = None
         self.expected_inflation: Optional[float] = None
-        self.initial_cape: float = 41.0
+        self.initial_cape: float = initial_cape
         self.initial_spx_level: Optional[float] = None
         self.initial_cpi_level: Optional[float] = None
         self.initial_yield_3m: Optional[float] = None
@@ -628,7 +649,7 @@ class HybridValuationVARSimulator(PathSimulator):
         self,
         returns_data: pd.DataFrame,
         levels_data: pd.DataFrame,
-        initial_cape: float = 34.0,
+        initial_cape: Optional[float] = None,
     ) -> None:
         """
         Fits VAR(p) via OLS, extracts empirical residuals, and logs initial
@@ -640,10 +661,13 @@ class HybridValuationVARSimulator(PathSimulator):
             Monthly increments matrix.
         levels_data : pd.DataFrame
             Monthly levels matrix.
-        initial_cape : float, default=34.0
-            Starting Shiller CAPE. Calibration Range: 25.0 to 38.0.
+        initial_cape : float, optional
+            Starting Shiller CAPE. Defaults to the value given to the
+            constructor (see __init__), so a configured value is no longer
+            silently replaced by a hard-coded default here.
         """
-        self.initial_cape = initial_cape
+        if initial_cape is not None:
+            self.initial_cape = initial_cape
         self.expected_inflation = float(
             returns_data["cpi_log_return"].mean() * 12)
         increment_matrix = returns_data.values
@@ -749,7 +773,8 @@ class HybridValuationVARSimulator(PathSimulator):
         # Sustainable real return anchor
         assert self.expected_inflation is not None
         equilibrium_equity_drift = (
-            self.earnings_growth + self.expected_inflation) * dt
+            self.earnings_growth + self.buyback_yield +
+            self.expected_inflation) * dt
         assert self.historical_mean_returns is not None
         historical_spx_mean = self.historical_mean_returns[0]
 
@@ -1306,6 +1331,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         rate_reversion_speed: float = 0.15,
         target_yield_3m: Optional[float] = None,
         target_yield_5y: Optional[float] = None,
+        initial_cape: float = 34.0,
+        annual_buyback_yield: float = 0.0,
     ):
         """
         Parameters & Calibration Ranges:
@@ -1322,6 +1349,9 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
 
         rate_reversion_speed, target_yield_3m, target_yield_5y : See
             VARResidualBootstrapSimulator -- same structural yield anchor.
+
+        initial_cape, annual_buyback_yield : See
+            HybridValuationVARSimulator.
         """
         self.block_size = (block_sizes if
                            block_sizes is not None else {0: 48, 1: 6})
@@ -1329,6 +1359,7 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         self.phi_cape = cape_reversion_speed
         self.gamma_cape = valuation_drag_coef
         self.earnings_growth = annual_earnings_growth
+        self.buyback_yield = annual_buyback_yield
         self.phi_rate = rate_reversion_speed
         self.target_yield_3m = target_yield_3m
         self.target_yield_5y = target_yield_5y
@@ -1338,7 +1369,7 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         self.stationary_dist: Optional[np.ndarray] = None
         self.historical_spx_mean: Optional[float] = None
         self.expected_inflation: Optional[float] = None
-        self.initial_cape: float = 41.0
+        self.initial_cape: float = initial_cape
         self.initial_spx_level: Optional[float] = None
         self.initial_cpi_level: Optional[float] = None
         self.initial_yield_3m: Optional[float] = None
@@ -1353,7 +1384,7 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         self,
         returns_data: pd.DataFrame,
         levels_data: pd.DataFrame,
-        initial_cape: float = 34.0,
+        initial_cape: Optional[float] = None,
         regime_labels: Optional[pd.Series] = None,
     ) -> None:
         """
@@ -1362,7 +1393,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         equilibrium drift inputs. If regime_labels is None, labels are
         derived automatically from the bundled NBER business cycle dates.
         """
-        self.initial_cape = initial_cape
+        if initial_cape is not None:
+            self.initial_cape = initial_cape
         if regime_labels is None:
             regime_labels = label_regimes(pd.DatetimeIndex(returns_data.index))
         regime_labels = regime_labels.reindex(returns_data.index)
@@ -1505,7 +1537,8 @@ class RegimeSwitchingValuationVARSimulator(PathSimulator):
         log_target_cape = np.log(self.target_cape)
         assert self.expected_inflation is not None
         equilibrium_equity_drift = (
-            self.earnings_growth + self.expected_inflation) * dt
+            self.earnings_growth + self.buyback_yield +
+            self.expected_inflation) * dt
 
         assert self.historical_spx_mean is not None
         for step in range(simulation_months):

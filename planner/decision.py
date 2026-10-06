@@ -24,8 +24,12 @@ CellKey = Tuple[str, float, float, str]
 class Cell:
     """
     One simulated (model, spending, equity, tax regime) combination.
-    Ruin timings are in months since retirement; returns are total real
-    returns over the horizon (terminal NAV / initial NAV - 1).
+    Ruin timings are in months since retirement. p*_return are total
+    NOMINAL returns over the horizon (terminal NAV / initial NAV - 1, with
+    terminal NAV in future dollars); p*_real_return deflate each path's
+    terminal NAV by its own simulated price level first. The real ones,
+    the real bands and ruin_prob_by_age are None for results produced
+    before the CLI wrote them.
     """
     model: str
     spending: float
@@ -45,6 +49,16 @@ class Cell:
     # None for results produced before the CLI wrote them.
     nav_bands: Optional[dict] = field(default=None, repr=False,
                                       compare=False, hash=False)
+    # Same percentiles in today's dollars.
+    real_nav_bands: Optional[dict] = field(default=None, repr=False,
+                                           compare=False, hash=False)
+    p5_real_return: Optional[float] = None
+    p10_real_return: Optional[float] = None
+    p25_real_return: Optional[float] = None
+    p50_real_return: Optional[float] = None
+    # Unconditional P(ruin before age), keyed by age as a string ("85").
+    ruin_prob_by_age: Optional[dict] = field(default=None, repr=False,
+                                             compare=False, hash=False)
     run_id: str = ""
     finished_at: str = ""
 
@@ -103,6 +117,12 @@ def cells_from_results(results: dict, run_id: str = "",
              p50_return=e["p50_return"],
              ruin_histogram=tuple(e["ruin_histogram"]),
              nav_bands=e.get("nav_bands"),
+             real_nav_bands=e.get("real_nav_bands"),
+             p5_real_return=e.get("p5_real_return"),
+             p10_real_return=e.get("p10_real_return"),
+             p25_real_return=e.get("p25_real_return"),
+             p50_real_return=e.get("p50_real_return"),
+             ruin_prob_by_age=e.get("ruin_prob_by_age"),
              run_id=run_id,
              finished_at=finished_at)
         for model, entries in results["results"].items()

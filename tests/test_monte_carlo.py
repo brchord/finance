@@ -408,6 +408,86 @@ class TestAggregate:
             cli.aggregate()
 
 
+
+class TestAssumptions:
+    """simulator_params, dividend_yield, real metrics and ruin-by-age."""
+    MODELS = ["RegimeSwitchingValuationVARSimulator",
+              "RawBlockBootstrapSimulator"]
+
+    def run(self, tmp_path, market_cache, tag, **overrides):
+        return run_cli(tmp_path, market_cache, tag=tag,
+                       models=self.MODELS, **overrides)
+
+    def test_assumptions_are_recorded(self, tmp_path, market_cache):
+        params = {"initial_cape": 40.0, "annual_buyback_yield": 0.015}
+        cli = self.run(tmp_path, market_cache, "rec",
+                       simulator_params=params, dividend_yield=0.02)
+        expected = {"dividend_yield": 0.02, "simulator_params": params}
+        assert cli.raw_results["assumptions"] == expected
+        assert cli.agg_results["assumptions"] == expected
+
+    def test_defaults_match_the_original_model(self, cli):
+        assert cli.agg_results["assumptions"] == {
+            "dividend_yield": 0.01, "simulator_params": {}}
+
+    def test_params_reach_only_models_that_accept_them(
+            self, tmp_path, market_cache):
+        base = self.run(tmp_path, market_cache, "base")
+        bought = self.run(tmp_path, market_cache, "bought",
+                          simulator_params={"annual_buyback_yield": 0.02})
+        for model, changed in (("RegimeSwitchingValuationVARSimulator",
+                                True),
+                               ("RawBlockBootstrapSimulator", False)):
+            a = base.raw_results["simulations"][model][0]["results"]
+            b = bought.raw_results["simulations"][model][0]["results"]
+            assert (a["Terminal SPX"] != b["Terminal SPX"]) is changed, model
+
+    def test_dividend_yield_reaches_the_strategy(
+            self, tmp_path, market_cache):
+        low = self.run(tmp_path, market_cache, "low", dividend_yield=0.01)
+        high = self.run(tmp_path, market_cache, "high", dividend_yield=0.03)
+        model = "RawBlockBootstrapSimulator"
+        a = low.raw_results["simulations"][model][0]["results"]
+        b = high.raw_results["simulations"][model][0]["results"]
+        assert a["Terminal SPX"] == b["Terminal SPX"]  # same markets
+        assert np.mean(b["Terminal NAV"]) > np.mean(a["Terminal NAV"])
+
+    def test_unknown_simulator_param_is_rejected(
+            self, tmp_path, market_cache):
+        with pytest.raises(ValueError, match="annual_buyback_yeild"):
+            self.run(tmp_path, market_cache, "typo",
+                     simulator_params={"annual_buyback_yeild": 0.01})
+
+    def test_real_metrics(self, cli):
+        for model, entries in cli.agg_results["results"].items():
+            raw = cli.raw_results["simulations"][model]
+            for entry, sim in zip(entries, raw):
+                where = f"{model} {entry['allocation']}"
+                nominal = np.asarray(sim["results"]["Terminal NAV"])
+                real = np.asarray(sim["results"]["Terminal Real NAV"])
+                # The synthetic market inflates on every path.
+                assert np.all(real <= nominal + 1e-9), where
+                assert entry["p50_real_return"] <= entry["p50_return"], where
+                bands = entry["real_nav_bands"]
+                assert bands["years"] == entry["nav_bands"]["years"], where
+                assert bands["p50"][0] == entry["nav_bands"]["p50"][0]
+
+    def test_ruin_prob_by_age(self, cli):
+        paths = cli.agg_results["total_paths"]
+        for entries in cli.agg_results["results"].values():
+            for entry in entries:
+                probs = entry["ruin_prob_by_age"]
+                assert list(probs) == ["75", "85", "95"]
+                # Retirement at 60 with a 10-year horizon: every age is
+                # past the end, so each covers all ruined paths.
+                assert all(p == entry["ruin_path_count"] / paths
+                           for p in probs.values())
+
+    def test_custom_ruin_ages(self, tmp_path, market_cache):
+        cli = self.run(tmp_path, market_cache, "ages", ruin_ages=[62, 65.5])
+        entry = cli.agg_results["results"][self.MODELS[0]][0]
+        assert list(entry["ruin_prob_by_age"]) == ["62", "65.5"]
+
 def test_golden_aggregates(cli):
     """
     Regression snapshot of the aggregated results for a fixed seed and

@@ -8,15 +8,17 @@ PathSimulator instances.
 
 import argparse
 import copy
+import inspect
 import json
 import logging
+import math
 import os
 import time
 import traceback
 
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -75,6 +77,8 @@ def _generate_paths_fast(
 
 
 NAV_BAND_PERCENTILES = (5, 10, 25, 50)
+# Ages for the unconditional P(ruin before age) metric (MCConfig.ruin_ages).
+DEFAULT_RUIN_AGES = (75, 85, 95)
 
 
 def nav_bands(annual_navs: np.ndarray) -> dict:
@@ -90,6 +94,59 @@ def nav_bands(annual_navs: np.ndarray) -> dict:
     for p, values in zip(NAV_BAND_PERCENTILES, q):
         bands[f"p{p}"] = values.tolist()
     return bands
+
+
+def price_levels(cpi_paths: np.ndarray,
+                 simulation_months: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Each path's cumulative price level relative to its first month, the
+    deflator that turns the strategy's nominal NAVs into today's dollars.
+
+    LongSPYWithTreasuryLadders grows spending with cpi[m] / cpi[0] and taxes
+    with the same ratio, so dividing a NAV by it gives a value consistent
+    with the spending and bracket indexing on that path.
+
+    Returns:
+    --------
+    (annual, terminal): annual has shape (num_paths, years + 1) and lines
+    up with annual_navs (column 0 is 1.0, the start; column y the end of
+    year y, see fast_ladder.annual_snapshot_months); terminal has shape
+    (num_paths,), the level at the final month (matches Terminal NAV).
+    """
+    base = cpi_paths[:, 0]
+    snapshots = fast_ladder.annual_snapshot_months(simulation_months)
+    annual = np.ones((cpi_paths.shape[0], snapshots.shape[0] + 1))
+    annual[:, 1:] = cpi_paths[:, snapshots] / base[:, None]
+    terminal = cpi_paths[:, simulation_months - 1] / base
+    return annual, terminal
+
+
+def ruin_probability_by_age(ruin_histogram: Sequence[float],
+                            total_paths: int, retirement_age: float,
+                            ages: Sequence[float]) -> Dict[str, float]:
+    """
+    Unconditional P(ruin before age A) for each A in `ages`: the share of
+    ALL paths (not just the ruined ones) that hit zero before that age. A
+    path ruined in month m is ruined at age retirement_age + m / 12, the
+    same convention as planner.decision.month_to_age.
+
+    Unlike the ruin-age statistics (ruin_month_median, _es5, _es10), which
+    are computed over ruined paths only, these are monotonic in risk: a
+    portfolio that rarely ruins can't look worse than one that ruins often
+    just because its few ruins happen earlier. Keys are the ages formatted
+    with :g ("85", "92.5") so they survive a JSON round trip.
+    """
+    cumulative = np.cumsum(np.asarray(ruin_histogram, dtype=float))
+    out: Dict[str, float] = {}
+    for age in ages:
+        # Ruin month m counts iff retirement_age + m / 12 < age, i.e.
+        # m < (age - retirement_age) * 12. round() strips float noise
+        # before ceil() (e.g. 25 * 12 computed as 300.00000000000006).
+        months_before = math.ceil(round((age - retirement_age) * 12.0, 9))
+        n = min(max(months_before, 0), len(cumulative))
+        ruined = cumulative[n - 1] if n > 0 else 0.0
+        out[f"{age:g}"] = float(ruined) / total_paths
+    return out
 
 
 class MonteCarloEngine:
@@ -137,7 +194,8 @@ class MonteCarloEngine:
         initial_nav: float,
         num_paths: int,
         seed: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+               np.ndarray]:
         """
         Static worker method executing a batch of paths inside an isolated
         process.
@@ -154,6 +212,11 @@ class MonteCarloEngine:
             4. annual_navs (np.ndarray): NAV at the start and at each
                year-end (num_paths, years + 1); see
                fast_ladder.annual_snapshot_months.
+            5. annual_price_levels (np.ndarray): each path's price level
+               at the same points, to deflate annual_navs (see
+               price_levels()).
+            6. terminal_price_levels (np.ndarray): each path's price level
+               at the final month, to deflate final_navs (num_paths,).
         """
         final_spx = np.empty(num_paths)
         final_navs = np.empty(num_paths)
@@ -170,6 +233,8 @@ class MonteCarloEngine:
         )
 
         spx_paths, cpi_paths, tbill_paths, tnote_paths = paths
+        annual_price_levels, terminal_price_levels = price_levels(
+            cpi_paths, simulation_months)
 
         for i in range(num_paths):
             # Execute monthly strategy simulation
@@ -193,7 +258,8 @@ class MonteCarloEngine:
                 ruin_month = np.argmax(nav_paths == 0.0)
                 ruin_histogram[ruin_month] += 1
 
-        return final_spx, final_navs, ruin_histogram, annual_navs
+        return (final_spx, final_navs, ruin_histogram, annual_navs,
+                annual_price_levels, terminal_price_levels)
 
     @staticmethod
     def _chunk_sizes(total_paths: int, n_workers: int) -> List[int]:
@@ -230,7 +296,8 @@ class MonteCarloEngine:
         num_paths: int,
         seed: int,
         portfolio_params: List[Tuple[float, float, float, float, tuple]],
-    ) -> Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray, np.ndarray]]]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray,
+               List[Tuple[np.ndarray, np.ndarray, np.ndarray]]]:
         """
         Worker for backend="numba" (MonteCarloCLI._run_numba): generates
         one chunk of a CELL's market paths once, inside this worker
@@ -258,6 +325,8 @@ class MonteCarloEngine:
         spx, cpi, tbill, tnote = _generate_paths_fast(
             path_simulator, simulation_months, num_paths, seed)
         final_spx = spx[:, -1]
+        annual_price_levels, terminal_price_levels = price_levels(
+            cpi, simulation_months)
 
         per_portfolio = []
         for equity, ladder, spending, div, flat in portfolio_params:
@@ -265,7 +334,8 @@ class MonteCarloEngine:
                 spx, cpi, tbill, tnote, initial_nav, simulation_months,
                 equity, ladder, spending, div, *flat))
 
-        return final_spx, per_portfolio
+        return (final_spx, annual_price_levels, terminal_price_levels,
+                per_portfolio)
 
     def submit(
         self,
@@ -299,18 +369,23 @@ class MonteCarloEngine:
     def collect(
         self,
         futures: List[Future],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+               np.ndarray]:
         """
         Blocks until the futures returned by submit() are done and assembles
         their results.
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs,
+        annual_price_levels, terminal_price_levels); see
+        _execute_strategy_batch.
         """
         all_final_spx = []
         all_final_navs = []
         all_annual_navs = []
+        all_annual_levels = []
+        all_terminal_levels = []
         full_ruin_histogram = np.zeros(self.simulation_months)
 
         # Iterate futures in their original submission order rather than
@@ -319,10 +394,13 @@ class MonteCarloEngine:
         # silently permuted which array position each simulated path landed
         # in from run to run.
         for future in futures:
-            f_spx, f_navs, f_ruin_histograms, f_annual = future.result()
+            (f_spx, f_navs, f_ruin_histograms, f_annual, f_annual_levels,
+             f_terminal_levels) = future.result()
             all_final_spx.append(f_spx)
             all_final_navs.append(f_navs)
             all_annual_navs.append(f_annual)
+            all_annual_levels.append(f_annual_levels)
+            all_terminal_levels.append(f_terminal_levels)
             full_ruin_histogram += f_ruin_histograms
 
         return (
@@ -330,6 +408,8 @@ class MonteCarloEngine:
             np.concatenate(all_final_navs),
             full_ruin_histogram,
             np.concatenate(all_annual_navs),
+            np.concatenate(all_annual_levels),
+            np.concatenate(all_terminal_levels),
         )
 
     def run(
@@ -337,7 +417,8 @@ class MonteCarloEngine:
         *,
         total_paths: int,
         n_workers: int
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+               np.ndarray]:
         """
         Convenience wrapper: runs this engine alone on its own process pool.
 
@@ -350,7 +431,8 @@ class MonteCarloEngine:
 
         Returns:
         --------
-        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs)
+        Tuple containing (final_spx, final_navs, ruin_histogram, annual_navs,
+        annual_price_levels, terminal_price_levels); see collect().
         """
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = self.submit(
@@ -417,7 +499,20 @@ class MonteCarloCLI:
                      n_workers: Optional[int] = os.cpu_count(),
                      models: list[str],
                      tax_regimes: Optional[list[str]] = None,
-                     master_seed: Optional[int] = None):
+                     master_seed: Optional[int] = None,
+                     dividend_yield: float = 0.01,
+                     simulator_params: Optional[dict] = None,
+                     ruin_ages: Optional[Sequence[float]] = None):
+            """
+            dividend_yield: the strategy's SPY cash dividend yield (was a
+                fixed 1%).
+            simulator_params: constructor keyword arguments for the path
+                simulators, e.g. {"initial_cape": 40, "annual_buyback_yield":
+                0.015}. Each model receives only the keys its constructor
+                accepts; see MonteCarloCLI._validate_simulator_params.
+            ruin_ages: ages for the unconditional P(ruin before age) metric
+                in the aggregated results (default 75, 85, 95).
+            """
             self.yearly_low = yearly_spending_floor
             self.yearly_top = yearly_spending_ceil
             self.equity_low = starting_equity
@@ -445,6 +540,21 @@ class MonteCarloCLI:
             self.tax_regimes = (
                     tax_regimes if tax_regimes is not None else ["none"])
             self.master_seed = master_seed
+            self.dividend_yield = dividend_yield
+            self.simulator_params = dict(simulator_params or {})
+            self.ruin_ages = list(ruin_ages if ruin_ages is not None
+                                  else DEFAULT_RUIN_AGES)
+
+        def assumptions(self) -> dict:
+            """
+            The market and strategy assumptions of this run, recorded in
+            both the raw and aggregated results so a results file says what
+            it was computed under.
+            """
+            return {
+                "dividend_yield": self.dividend_yield,
+                "simulator_params": dict(self.simulator_params),
+            }
 
         def _step_count(self, low, high, increment):
             """
@@ -485,6 +595,7 @@ class MonteCarloCLI:
                             p["yearly_spending"] = yearly
                             p["model"] = model
                             p["tax_regime"] = tax_regime
+                            p["dividend_yield"] = self.dividend_yield
                             yield p
 
         def total_portfolios(self):
@@ -517,7 +628,10 @@ class MonteCarloCLI:
                 n_workers=config["workers"],
                 models=config["models"],
                 tax_regimes=config.get("tax_regimes", ["none"]),
-                master_seed=config.get("master_seed"))
+                master_seed=config.get("master_seed"),
+                dividend_yield=config.get("dividend_yield", 0.01),
+                simulator_params=config.get("simulator_params"),
+                ruin_ages=config.get("ruin_ages"))
             logging.info("Loaded configuration: ")
             kvs = [f"{k.replace('_', ' ').title()}: {v}"
                    for k, v in config.items()]
@@ -526,6 +640,46 @@ class MonteCarloCLI:
         except Exception as exc:
             logging.error("Error loading tool configuration: %s", str(exc))
             raise exc
+
+    def _validate_simulator_params(self):
+        """
+        Rejects simulator_params keys that no selected model accepts (most
+        likely a typo, which would otherwise be silently ignored) and logs
+        which models ignore which keys.
+        """
+        config = self.simulation_config
+        assert config is not None, "config must be loaded first"
+        params = config.simulator_params
+        if not params:
+            return
+        unused = set(params)
+        for model_name in config.models:
+            if model_name not in self.model_map:
+                raise ValueError(f"Model {model_name} not supported")
+            accepted = inspect.signature(
+                self.model_map[model_name].__init__).parameters
+            ignored = sorted(k for k in params if k not in accepted)
+            unused -= set(params) - set(ignored)
+            if ignored:
+                logging.info("%s ignores simulator_params %s",
+                             model_name, ", ".join(ignored))
+        if unused:
+            raise ValueError(
+                "simulator_params not accepted by any selected model: "
+                f"{', '.join(sorted(unused))}")
+
+    def _build_simulator(self, model_name: str) -> PathSimulator:
+        """
+        Instantiates (but does not fit) a model, passing it the configured
+        simulator_params its constructor accepts.
+        """
+        config = self.simulation_config
+        assert config is not None, "config must be loaded first"
+        cls = self.model_map[model_name]
+        accepted = inspect.signature(cls.__init__).parameters
+        kwargs = {k: v for k, v in config.simulator_params.items()
+                  if k in accepted}
+        return cls(**kwargs)
 
     def run(self, *, backend: str = "process"):
         """
@@ -572,12 +726,14 @@ class MonteCarloCLI:
                 "CLI run can only be run once per instantiation")
 
         self._load_config()
+        self._validate_simulator_params()
         config = self.simulation_config
 
         results = {
             "initial_nav": config.initial_nav,
             "years": config.years,
             "total_paths": config.total_paths,
+            "assumptions": config.assumptions(),
             "simulations": {},
             "perf_data": {}
         }
@@ -616,7 +772,6 @@ class MonteCarloCLI:
         with ProcessPoolExecutor(max_workers=config.n_workers) as executor:
             for p in portfolios:
                 model_name = p["model"]
-                m = self.model_map[model_name]
                 logging.info(
                     "Submitting simulation #%d out of %d. Progress: %.2f%%",
                     i + 1, total, 100.0 * (i + 1) / total)
@@ -626,7 +781,7 @@ class MonteCarloCLI:
                     p["yearly_spending"], p["equity_allocation"] * 100.0)
                 setup_start = time.perf_counter()
 
-                simulator = m()
+                simulator = self._build_simulator(model_name)
                 simulator.fit(returns, levels)
 
                 new_cell_key = (model_name, p["equity_allocation"],
@@ -653,7 +808,8 @@ class MonteCarloCLI:
                 # Time spent blocked waiting on this portfolio's results;
                 # simulation itself overlaps with other portfolios' setup.
                 sim_start = time.perf_counter()
-                spx, nav, ruin_histogram, annual_navs = mc.collect(futures)
+                (spx, nav, ruin_histogram, annual_navs, annual_levels,
+                 terminal_levels) = mc.collect(futures)
                 sim_end = time.perf_counter()
 
                 perf_counters[model_name]["simulation"].append(
@@ -662,7 +818,8 @@ class MonteCarloCLI:
                 data_start = time.perf_counter()
                 run_output = {
                         "Terminal SPX": spx.tolist(),
-                        "Terminal NAV": nav.tolist()
+                        "Terminal NAV": nav.tolist(),
+                        "Terminal Real NAV": (nav / terminal_levels).tolist(),
                 }
                 results["simulations"][model_name].append({
                     "spending": p["yearly_spending"],
@@ -671,6 +828,7 @@ class MonteCarloCLI:
                     "tax_regime": p["tax_regime"],
                     "ruin_histogram": ruin_histogram.tolist(),
                     "nav_bands": nav_bands(annual_navs),
+                    "real_nav_bands": nav_bands(annual_navs / annual_levels),
                     "results": run_output
                 })
                 data_end = time.perf_counter()
@@ -723,6 +881,7 @@ class MonteCarloCLI:
                 "CLI run can only be run once per instantiation")
 
         self._load_config()
+        self._validate_simulator_params()
         config = self.simulation_config
         simulation_months = config.simulation_months
 
@@ -730,6 +889,7 @@ class MonteCarloCLI:
             "initial_nav": config.initial_nav,
             "years": config.years,
             "total_paths": config.total_paths,
+            "assumptions": config.assumptions(),
             "simulations": {},
             "perf_data": {}
         }
@@ -750,7 +910,7 @@ class MonteCarloCLI:
         # -- never on a portfolio's allocation/spending/tax regime -- so,
         # unlike backend="process", it only needs to run once per model.
         fitted_simulators = {
-            model_name: self.model_map[model_name]()
+            model_name: self._build_simulator(model_name)
             for model_name in config.models
         }
         for sim in fitted_simulators.values():
@@ -837,13 +997,17 @@ class MonteCarloCLI:
                 data_start = time.perf_counter()
                 final_spx = np.concatenate(
                     [chunk[0] for chunk in chunk_results])
+                annual_levels = np.concatenate(
+                    [chunk[1] for chunk in chunk_results])
+                terminal_levels = np.concatenate(
+                    [chunk[2] for chunk in chunk_results])
                 for idx, p in enumerate(portfolios):
                     final_navs = np.concatenate(
-                        [chunk[1][idx][0] for chunk in chunk_results])
+                        [chunk[3][idx][0] for chunk in chunk_results])
                     ruin_months = np.concatenate(
-                        [chunk[1][idx][1] for chunk in chunk_results])
+                        [chunk[3][idx][1] for chunk in chunk_results])
                     annual_navs = np.concatenate(
-                        [chunk[1][idx][2] for chunk in chunk_results])
+                        [chunk[3][idx][2] for chunk in chunk_results])
                     ruin_histogram = np.zeros(simulation_months)
                     ruined = ruin_months[ruin_months >= 0]
                     if ruined.size > 0:
@@ -859,9 +1023,13 @@ class MonteCarloCLI:
                         "tax_regime": p["tax_regime"],
                         "ruin_histogram": ruin_histogram.tolist(),
                         "nav_bands": nav_bands(annual_navs),
+                        "real_nav_bands": nav_bands(
+                            annual_navs / annual_levels),
                         "results": {
                             "Terminal SPX": final_spx.tolist(),
                             "Terminal NAV": final_navs.tolist(),
+                            "Terminal Real NAV": (
+                                final_navs / terminal_levels).tolist(),
                         },
                     })
                 data_end = time.perf_counter()
@@ -895,6 +1063,8 @@ class MonteCarloCLI:
         run_stats["years_to_simulate"] = years
         run_stats["total_paths"] = paths
         run_stats["retirement_age"] = self.simulation_config.retirement_age
+        # None for raw results produced before assumptions were recorded.
+        run_stats["assumptions"] = self.raw_results.get("assumptions")
         run_stats["results"] = {}
 
         for m in models:
@@ -955,6 +1125,23 @@ class MonteCarloCLI:
 
                 entry["p25_return"] = df_data["Returns"].quantile(0.25)
                 entry["p50_return"] = df_data["Returns"].quantile(0.5)
+                # The returns above are NOMINAL (Terminal NAV is in
+                # future dollars). The real ones deflate each path's
+                # terminal NAV by its own price level; None for raw results
+                # produced before Terminal Real NAV existed.
+                real_navs = sim["results"].get("Terminal Real NAV")
+                real_returns = (
+                    (np.asarray(real_navs) - initial_nav) / initial_nav
+                    if real_navs is not None else None)
+                for q, name in ((0.05, "p5"), (0.1, "p10"), (0.25, "p25"),
+                                (0.5, "p50")):
+                    entry[f"{name}_real_return"] = (
+                        float(np.quantile(real_returns, q))
+                        if real_returns is not None else None)
+                entry["ruin_prob_by_age"] = ruin_probability_by_age(
+                    sim["ruin_histogram"], paths,
+                    self.simulation_config.retirement_age,
+                    self.simulation_config.ruin_ages)
                 # Monthly ruin counts (month index since retirement), for
                 # survival curves: P(solvent after month m) =
                 # 1 - cumsum(ruin_histogram)[m] / total_paths.
@@ -963,6 +1150,8 @@ class MonteCarloCLI:
                 # Per-year NAV percentiles (see nav_bands()); None for raw
                 # results produced before they existed.
                 entry["nav_bands"] = sim.get("nav_bands")
+                # Same bands in today's dollars (see price_levels()).
+                entry["real_nav_bands"] = sim.get("real_nav_bands")
                 run_stats["results"][m].append(entry)
         self.agg_results = run_stats
 
