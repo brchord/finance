@@ -94,12 +94,6 @@ class Cell:
         "real_nav_bands or nav_bands; None when the run predates them."
         return self.real_nav_bands if real else self.nav_bands
 
-    @property
-    def first_ruin_month(self) -> Optional[int]:
-        "Month of the earliest ruin (a single path), None if none."
-        return next((m for m, n in enumerate(self.ruin_histogram) if n > 0),
-                    None)
-
     def survival(self) -> List[float]:
         """
         P(still solvent at the end of month m) for each month m of the
@@ -129,12 +123,6 @@ def ruin_ages(retirement_age: float, terminal_age: float) -> List[float]:
     overall ruin rate.
     """
     return [a for a in RUIN_AGES if retirement_age < a <= terminal_age]
-
-
-def month_to_age(month: Optional[float],
-                 retirement_age: float) -> Optional[float]:
-    "Age at a month index counted from retirement."
-    return None if month is None else retirement_age + month / 12.0
 
 
 def cells_from_results(results: dict, run_id: str = "",

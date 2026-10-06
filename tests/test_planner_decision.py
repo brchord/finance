@@ -38,17 +38,10 @@ class TestCell:
         assert cell(equity=0.6).allocation == "60/40"
         assert cell(equity=0.35).allocation == "35/65"
 
-    def test_first_ruin_month(self):
-        assert cell(histogram=[0, 0, 3, 1]).first_ruin_month == 2
-        assert cell(histogram=[0, 0, 0]).first_ruin_month is None
-
     def test_survival(self):
         c = cell(paths=10, histogram=[0, 1, 0, 2])
         assert c.survival() == pytest.approx([1.0, 0.9, 0.9, 0.7])
 
-    def test_month_to_age(self):
-        assert d.month_to_age(18, 42) == 43.5
-        assert d.month_to_age(None, 42) is None
 
 
 def test_cells_from_results_reads_cli_output():

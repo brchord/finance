@@ -86,8 +86,7 @@ def kpis(title: str, c: decision.Cell):
                        ui.pct(decision.ruin_prob_before(c, a, ret_age)),
                        help="Share of all paths ruined before this age.")
     note = "" if r == real else " (this run predates real returns)"
-    st.caption(f"{c.ruin_count:,} ruined paths · earliest ruin at age "
-               f"{ui.age(c.first_ruin_month, ret_age)} (a single path; noisy)"
+    st.caption(f"{c.ruin_count:,} ruined paths"
                f" · P5 return {ui.total_return(c.pct_return(5, r))}"
                f" · P25 return {ui.total_return(c.pct_return(25, r))}"
                f" · returns in {ui.dollars_label(r)}{note}")

@@ -128,7 +128,7 @@ def ruin_probability_by_age(ruin_histogram: Sequence[float],
     Unconditional P(ruin before age A) for each A in `ages`: the share of
     ALL paths (not just the ruined ones) that hit zero before that age. A
     path ruined in month m is ruined at age retirement_age + m / 12, the
-    same convention as planner.decision.month_to_age.
+    same convention as planner.decision.ruin_prob_before.
 
     Unlike statistics computed over ruined paths only (such as a median
     ruin age), these are monotonic in risk: a portfolio that rarely ruins

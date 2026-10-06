@@ -320,11 +320,6 @@ def years(x: float) -> str:
     return f"{x:.2f} yr"
 
 
-def age(month: Optional[float], retirement_age: float) -> str:
-    a = decision.month_to_age(month, retirement_age)
-    return "no ruin" if a is None else f"{a:.1f}"
-
-
 def total_return(r: Optional[float]) -> str:
     "Total return over the horizon, e.g. +5% or +1,430%."
     return "—" if r is None else f"{r:+,.0%}"

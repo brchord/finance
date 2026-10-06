@@ -335,8 +335,8 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
   ranking; the reference model is shown for context, visually secondary.
 - **Show the reasoning.** Rankings explain themselves; numbers near a
   threshold carry a noise flag.
-- **De-emphasize minimum ruin age.** It is set by a single path. Show it as
-  a detail only.
+- **No minimum ruin age.** It is set by a single path, so it reflects
+  the run's sampling more than the portfolio; it isn't shown.
 
 ## Pages
 
@@ -376,8 +376,7 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 For a selected (spending, allocation):
 - KPI cards: lifetime ruin (headline), years in ruin, ruin by the end
   of the horizon, P10 and P50 return, P(ruin before 75/85/95) inside the
-  horizon; minimum ruin age as a small detail. Decision model
-  next to the reference model.
+  horizon. Decision model next to the reference model.
 - Survival curves show P(alive) alongside, instead of a ceiling line.
 - Survival curves: decision and reference on the same axes, the ceiling
   marked.
