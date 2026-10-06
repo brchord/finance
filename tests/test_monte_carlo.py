@@ -395,8 +395,10 @@ class TestAggregate:
         assert entry["ruin_month_median"] == 5.0
         # 5th/10th percentiles of [1,3,5,7,9] are 1.4 / 1.8: only month 1
         # falls in either tail.
-        assert entry["ruin_month_es5"] == 1.0
-        assert entry["ruin_month_es10"] == 1.0
+        # The ruin-age expected shortfalls were removed: consumers derive
+        # what they need from ruin_histogram.
+        assert "ruin_month_es5" not in entry
+        assert "ruin_month_es10" not in entry
         assert entry["allocation"] == "60-40"
         assert entry["equity"] == 0.6
         assert entry["ruin_histogram"] == [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0]
@@ -405,8 +407,7 @@ class TestAggregate:
         entry = self.build(tmp_path, market_cache, [0.0] * 12,
                            [1_000_000.0] * 4)
         assert entry["ruin_path_count"] == 0
-        for key in ("ruin_month_min", "ruin_month_median",
-                    "ruin_month_es5", "ruin_month_es10"):
+        for key in ("ruin_month_min", "ruin_month_median"):
             assert entry[key] is None
 
     def test_return_quantiles(self, tmp_path, market_cache):

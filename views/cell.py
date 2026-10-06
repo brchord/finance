@@ -88,10 +88,6 @@ def kpis(title: str, c: decision.Cell):
     note = "" if r == real else " (this run predates real returns)"
     st.caption(f"{c.ruin_count:,} ruined paths · earliest ruin at age "
                f"{ui.age(c.ruin_month_min, ret_age)} (a single path; noisy)"
-               f" · ES10 / ES5 ruin age "
-               f"{ui.age(c.ruin_month_es10, ret_age)} / "
-               f"{ui.age(c.ruin_month_es5, ret_age)} (among ruined paths "
-               f"only)"
                f" · P5 return {ui.total_return(c.pct_return(5, r))}"
                f" · P25 return {ui.total_return(c.pct_return(25, r))}"
                f" · returns in {ui.dollars_label(r)}{note}")

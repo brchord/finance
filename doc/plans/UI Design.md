@@ -70,10 +70,13 @@ after the horizon isn't simulated, so it doesn't count.
 **Expected years in ruin** is the timing measure: the expected years lived
 after the money runs out, within the horizon, averaged over *all* paths
 (0 where it never does). It is the unconditional, retirement version of
-expected shortfall. ES5/ES10 ruin ages are conditional on ruin (averaged
-over ruined paths only), so a cell that ruins more often but later could
-rank above a safer one; they are no longer used for decisions and appear
-only as a detail on Cell detail.
+expected shortfall. It replaced ES5/ES10 ruin ages, which were
+conditional on ruin (averaged over ruined paths only): a cell that ruins
+more often but later could rank above a safer one, and on the user's
+profile they picked the riskier cell whenever they disagreed with years
+in ruin. They were removed from the UI and from the CLI's aggregated
+results; the UI derives every ruin-timing measure from
+`ruin_histogram`.
 
 Mortality is a Gompertz law per person (`decision.Life`: modal age at
 death and dispersion), set per review in the sidebar ("Life expectancy")
@@ -289,7 +292,8 @@ Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
 - `spending`, `allocation`, `tax_regime` (existing; add a numeric `equity`
   so the UI doesn't parse the `"60-40"` string)
 - `ruin_path_count`, `ruin_month_min`, `ruin_month_median`,
-  `ruin_month_es5`, `ruin_month_es10` (existing)
+  (`ruin_month_es5` / `ruin_month_es10` were removed; older results
+  still carry them and the UI ignores them)
 - `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
 - `ruin_histogram`: monthly counts over the horizon (new)
 - `nav_bands: {years: [0, 1, ...], p5: [], p10: [], p25: [], p50: []}`:
@@ -358,7 +362,7 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 For a selected (spending, allocation):
 - KPI cards: lifetime ruin (headline), years in ruin, ruin by the end
   of the horizon, P10 and P50 return, P(ruin before 75/85/95) inside the
-  horizon; minimum ruin age and ES10/ES5 as small details. Decision model
+  horizon; minimum ruin age as a small detail. Decision model
   next to the reference model.
 - Survival curves show P(alive) alongside, instead of a ceiling line.
 - Survival curves: decision and reference on the same axes, the ceiling

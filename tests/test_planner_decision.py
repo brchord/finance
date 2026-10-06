@@ -9,7 +9,7 @@ from planner import decision as d
 GOLDEN = Path(__file__).parent / "golden" / "monte_carlo_agg.json"
 
 
-def cell(spending=100_000.0, equity=0.6, ruin=0, paths=10_000, es10=None,
+def cell(spending=100_000.0, equity=0.6, ruin=0, paths=10_000,
          p10=1.0, p50=2.0, model=d.DECISION_MODEL, run_id="r",
          finished_at="2026-01-01T00:00:00", histogram=None):
     """
@@ -23,7 +23,7 @@ def cell(spending=100_000.0, equity=0.6, ruin=0, paths=10_000, es10=None,
     return d.Cell(
         model=model, spending=spending, equity=equity,
         tax_regime=d.DEFAULT_TAX_REGIME, total_paths=paths, ruin_count=ruin,
-        ruin_month_min=None, ruin_month_es5=None, ruin_month_es10=es10,
+        ruin_month_min=None,
         p5_return=0.0, p10_return=p10, p25_return=0.0, p50_return=p50,
         ruin_histogram=tuple(histogram), run_id=run_id,
         finished_at=finished_at)
@@ -93,6 +93,16 @@ def test_cells_without_real_metrics():
                 e.pop(key, None)
     for c in d.cells_from_results(results):
         assert all(getattr(c, key) is None for key in REAL_KEYS)
+
+
+def test_cells_ignore_removed_ruin_age_shortfalls():
+    # results.json written before ruin_month_es5/_es10 were removed.
+    results = json.loads(GOLDEN.read_text())
+    for entries in results["results"].values():
+        for e in entries:
+            e["ruin_month_es5"] = e["ruin_month_es10"] = 12.0
+    assert len(d.cells_from_results(results)) == sum(
+        len(v) for v in results["results"].values())
 
 
 def test_cells_without_nav_bands():
@@ -246,8 +256,7 @@ class TestRank:
 
 def grid(ruin_by_spending, equities=(0.5, 0.6), paths=10_000):
     """Cells whose min ruin per spending level is given (in paths)."""
-    return [cell(spending=s, equity=e, ruin=r + i * 50, paths=paths,
-                 es10=600.0)
+    return [cell(spending=s, equity=e, ruin=r + i * 50, paths=paths)
             for s, r in ruin_by_spending.items()
             for i, e in enumerate(equities)]
 

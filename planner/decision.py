@@ -41,8 +41,6 @@ class Cell:
     total_paths: int
     ruin_count: int
     ruin_month_min: Optional[float]
-    ruin_month_es5: Optional[float]
-    ruin_month_es10: Optional[float]
     p5_return: float
     p10_return: float
     p25_return: float
@@ -146,8 +144,6 @@ def cells_from_results(results: dict, run_id: str = "",
              total_paths=total_paths,
              ruin_count=e["ruin_path_count"],
              ruin_month_min=e["ruin_month_min"],
-             ruin_month_es5=e["ruin_month_es5"],
-             ruin_month_es10=e["ruin_month_es10"],
              p5_return=e["p5_return"],
              p10_return=e["p10_return"],
              p25_return=e["p25_return"],

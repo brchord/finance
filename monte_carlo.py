@@ -130,10 +130,10 @@ def ruin_probability_by_age(ruin_histogram: Sequence[float],
     path ruined in month m is ruined at age retirement_age + m / 12, the
     same convention as planner.decision.month_to_age.
 
-    Unlike the ruin-age statistics (ruin_month_median, _es5, _es10), which
-    are computed over ruined paths only, these are monotonic in risk: a
-    portfolio that rarely ruins can't look worse than one that ruins often
-    just because its few ruins happen earlier. Keys are the ages formatted
+    Unlike ruin_month_median, which is computed over ruined paths only,
+    these are monotonic in risk: a portfolio that rarely ruins can't look
+    worse than one that ruins often just because its few ruins happen
+    earlier. Keys are the ages formatted
     with :g ("85", "92.5") so they survive a JSON round trip.
     """
     cumulative = np.cumsum(np.asarray(ruin_histogram, dtype=float))
@@ -1080,8 +1080,9 @@ class MonteCarloCLI:
                     (df_data["Terminal NAV"] - initial_nav)
                     / initial_nav
                 )
-                # Compute the Expected Shortfall 5 and 10 for ages ending in
-                # ruin.
+                # Earliest and median ruin month, over ruined paths only.
+                # Anything else about ruin timing derives from
+                # ruin_histogram (and ruin_prob_by_age below).
                 ruin_ages = {
                     i: int(v) for
                     (i, v) in enumerate(sim["ruin_histogram"]) if v > 0
@@ -1091,17 +1092,11 @@ class MonteCarloCLI:
                 ruin_flat_data = np.repeat(v, f)
 
                 if len(ruin_flat_data) > 0:
-                    p5, p10, p50 = np.quantile(
-                        ruin_flat_data, [0.05, 0.1, 0.5])
-                    ruin_flat_data.sort()
-                    es5_idx = np.where(ruin_flat_data <= p5)
-                    es10_idx = np.where(ruin_flat_data <= p10)
-                    es5 = ruin_flat_data[es5_idx].mean()
-                    es10 = ruin_flat_data[es10_idx].mean()
+                    p50 = np.quantile(ruin_flat_data, 0.5)
                     ruin = len(ruin_flat_data)
-                    min_ruin_age = int(ruin_flat_data[0])
+                    min_ruin_age = int(ruin_flat_data.min())
                 else:
-                    p50 = es5 = es10 = None
+                    p50 = None
                     ruin = 0
                     min_ruin_age = None
 
@@ -1115,10 +1110,6 @@ class MonteCarloCLI:
                 entry["ruin_month_min"] = min_ruin_age
                 entry["ruin_month_median"] = (
                         float(p50) if p50 is not None else None)
-                entry["ruin_month_es5"] = (
-                        float(es5) if es5 is not None else None)
-                entry["ruin_month_es10"] = (
-                        float(es10) if es10 is not None else None)
 
                 entry["p5_return"] = df_data["Returns"].quantile(0.05)
                 entry["p10_return"] = df_data["Returns"].quantile(0.1)

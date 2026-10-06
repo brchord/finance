@@ -8,8 +8,8 @@ def cell_with_histogram(histogram):
     return decision.Cell(
         model=decision.DECISION_MODEL, spending=90_000.0, equity=0.6,
         tax_regime=decision.DEFAULT_TAX_REGIME, total_paths=1_000,
-        ruin_count=sum(histogram), ruin_month_min=None, ruin_month_es5=None,
-        ruin_month_es10=None, p5_return=0.0, p10_return=0.0,
+        ruin_count=sum(histogram), ruin_month_min=None,
+        p5_return=0.0, p10_return=0.0,
         p25_return=0.0, p50_return=0.0, ruin_histogram=tuple(histogram))
 
 
