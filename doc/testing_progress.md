@@ -39,13 +39,17 @@ python3 -m venv /tmp/ci-venv
 ## Golden snapshot
 
 `tests/golden/monte_carlo_agg.json` pins the aggregated Monte Carlo output for
-a fixed seed and config (checked by `test_golden_aggregates`). A failure means
+a fixed seed and config (checked by `test_golden_aggregates`);
+`tests/golden/monte_carlo_agg_assumptions.json` does the same for a run with
+non-default `simulator_params` and `dividend_yield`
+(`test_golden_aggregates_with_assumptions`). One `UPDATE_GOLDEN=1` run
+regenerates both. A failure means
 simulation output changed. If the change is intended (e.g. a model fix),
 regenerate and review the diff before committing:
 
 ```
 UPDATE_GOLDEN=1 .venv/bin/python -m pytest tests/test_monte_carlo.py
-git diff tests/golden/monte_carlo_agg.json
+git diff tests/golden/
 ```
 
 Check that only the models you expected to change moved, and mention the
@@ -59,5 +63,5 @@ snapshot change in the commit message.
 | `tests/test_tax_lots.py` | `TaxLotTracker`: FIFO lot matching, short- vs long-term split (11 months is short-term), losses as negative gains, non-positive buys ignored, overselling raises. |
 | `tests/test_strategy.py` | `LongSPYWithTreasuryLadders`: constructor validation (allocations sum to 100%, spending must be positive), JSON construction, needed-liquidity calculation, NAV conservation, ruin (zero-filled path, no warnings), quarterly dividends, realized-gain roll-ups, tax cadence and amounts, state reset, `full_book`. |
 | `tests/test_path_simulation.py` | Invariants for all six path simulators, unique/stable model names, abstract base class, regime-switching fit checks, and `label_regimes` (contraction runs from the month after the peak through the trough month inclusive, on both month-start and month-end indexes). |
-| `tests/test_monte_carlo.py` | Config sweeps, run shape, seed reproducibility, common random numbers across tax regimes, aggregation maths, the configurable assumptions (`simulator_params`, `dividend_yield`, `ruin_ages`, recorded under `assumptions`), real-terms metrics, and the golden snapshot. |
+| `tests/test_monte_carlo.py` | Config sweeps, run shape, seed reproducibility, common random numbers across tax regimes, aggregation maths, and the golden snapshots. `TestAssumptions`: `simulator_params` / `dividend_yield` on both backends, recorded under `assumptions`, validation (unknown keys rejected and listed sorted, partially accepted keys logged, empty = absent). `TestRealMetrics`: real equals nominal under zero inflation, ruined paths stay 0, year 0 is `initial_nav`, fractional horizons. `TestRuinProbabilityByAge`: monotone, bounded, agrees with `Cell.survival()`, edge ages. Old raw files without the new fields still aggregate. The second snapshot `golden/monte_carlo_agg_assumptions.json` pins a non-default-assumptions run. |
 | `tests/test_valuation_assumptions.py` | `initial_cape` and `annual_buyback_yield` on the CAPE-drag simulators (defaults reproduce the old paths, constructor value survives `fit()`, fast paths match the references), `price_levels` and the unconditional `ruin_probability_by_age`. |

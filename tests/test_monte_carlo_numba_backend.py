@@ -139,3 +139,37 @@ class TestNumbaBackendMatchesProcessBackend:
             for p_run, n_run in zip(p_runs, n_runs):
                 assert len(n_run["results"]["Terminal NAV"]) == 3
                 assert_backends_match(model_name, p_run, n_run)
+
+    def test_non_default_assumptions_match_process_backend(
+            self, tmp_path, market_cache):
+        # simulator_params and dividend_yield take different routes into
+        # each backend (per-portfolio simulators and strategy objects vs
+        # one fitted simulator per model and the fast operator's arguments).
+        assumptions = dict(
+            simulator_params={"initial_cape": 40.0, "target_cape": 26.0,
+                              "annual_buyback_yield": 0.015},
+            dividend_yield=0.02)
+        process_cli = run_cli(tmp_path, market_cache, "process_assume",
+                              "process", **assumptions)
+        numba_cli = run_cli(tmp_path, market_cache, "numba_assume",
+                            "numba", **assumptions)
+
+        assert (process_cli.raw_results["assumptions"]
+                == numba_cli.raw_results["assumptions"]
+                == assumptions)
+        for model_name, p_runs in process_cli.raw_results[
+                "simulations"].items():
+            n_runs = numba_cli.raw_results["simulations"][model_name]
+            for p_run, n_run in zip(p_runs, n_runs, strict=True):
+                if model_name not in MATCHES_ONLY_TO_ROUNDING:
+                    assert_backends_match(model_name, p_run, n_run)
+                    continue
+                # Hybrid's market paths still match to rounding, but with
+                # these assumptions a last-digit difference flips a
+                # discrete strategy decision on a path or two, moving its
+                # terminal NAV by ~0.3%. Changing target_cape alone, which
+                # predates this test, does the same, so NAVs aren't
+                # compared here.
+                np.testing.assert_allclose(
+                    n_run["results"]["Terminal SPX"],
+                    p_run["results"]["Terminal SPX"], rtol=1e-9)
