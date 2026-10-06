@@ -17,6 +17,7 @@ from planner import charts, decision, store
 PENDING_REVIEW = "_pending_review_id"
 REAL, NOMINAL = "Today's $", "Nominal $"
 DEFAULT_CEILING_PCT = decision.Criteria().ruin_ceiling * 100
+DEFAULT_TIE_PCT = decision.Criteria().tie_share * 100
 
 
 def theme() -> charts.Theme:
@@ -68,8 +69,7 @@ def criteria(review: store.Review) -> decision.Criteria:
     s = st.session_state
     return decision.Criteria(
         ruin_ceiling=s.get("ceiling_pct", DEFAULT_CEILING_PCT) / 100,
-        ruin_tolerance=s.get("ruin_tol_pp", 1.0) / 100,
-        years_in_ruin_tolerance=s.get("yir_tol_years", 0.1),
+        tie_share=s.get("tie_pct", DEFAULT_TIE_PCT) / 100,
         p10_tolerance=s.get("p10_tol_pct", 10.0) / 100,
         retirement_age=review.profile.retirement_age,
         household=review.household)
@@ -221,10 +221,15 @@ def sidebar():
             with st.expander("Life expectancy"):
                 household_form(review)
         with st.expander("Ranking tolerances"):
-            st.number_input("Ruin rate tie (pp)", min_value=0.0, step=0.25,
-                            value=1.0, key="ruin_tol_pp")
-            st.number_input("Years-in-ruin tie (years)", min_value=0.0,
-                            step=0.05, value=0.1, key="yir_tol_years")
+            st.number_input(
+                "Ruin tie (% of the ceiling)", min_value=0.0, max_value=100.0,
+                step=5.0, value=DEFAULT_TIE_PCT, key="tie_pct",
+                help="Two allocations tie on lifetime ruin when they are "
+                     "within this share of the ceiling (0.2pp at 20% of a "
+                     "1% ceiling), and on years in ruin within that times "
+                     f"{decision.YEARS_PER_RUIN:g} years. A difference "
+                     "within the simulation's noise (2 standard errors) "
+                     "is always a tie.")
             st.number_input("P10 tie (% of terminal wealth)",
                             min_value=0.0, step=1.0, value=10.0,
                             key="p10_tol_pct")

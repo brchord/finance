@@ -126,18 +126,31 @@ Lexicographic with tie tolerances. Defaults (adjustable):
 
 | Step | Criterion | Better | Tied if |
 |---|---|---|---|
-| 0 | Lifetime ruin | lower | within 1 percentage point |
-| 1 | Expected years in ruin | fewer | within 0.1 years |
+| 0 | Lifetime ruin | lower | within 20% of the ceiling (0.2pp at 1%) |
+| 1 | Expected years in ruin | fewer | within that × 10 years (0.02 years at 1%) |
 | 2 | P10 return (real) | higher | within 10% relative, on terminal wealth (1 + return) |
 | 3 | P50 return (real) | higher | — (final decider; an exact tie goes to lower lifetime ruin, then fewer years in ruin) |
 
 Notes:
+- The risk tolerances **scale with the ceiling** (one setting, "ruin
+  tie", as a share of it). Fixed tolerances sized for one ceiling break
+  at another: at a 1% ceiling a 1pp tie made every passing cell tie on
+  ruin, so ranking reduced to "pass, then highest P10" and picked the
+  riskiest passing allocation (0.97% lifetime ruin over 0.53% in the test
+  run). The ×10 converts a ruin tie into years: a path ruined while
+  someone is alive is lived in ruin ~6-9 years on the user's profile, and
+  it is the ratio of the original 1pp / 0.1-year defaults.
+- A difference within **2 standard errors** of the two cells' estimates
+  is always a tie, whatever the tolerance: below that it is simulation
+  noise.
+- Tested alternatives on 25k-path runs of the user's profile: noise-only
+  ties made ranking "minimize risk at any cost" (20/80 with a -63% real
+  median); fixed tolerances made it "maximize P10 once under the gate".
+  Scaled tolerances picked 40/60-50/50 at every frontier level.
 - Lifetime ruin still counts after the gate: a cell near the ceiling
-  must not beat a much safer one on timing alone.
+  must not beat a much safer one on timing or returns alone.
 - Returns are real (today's dollars) when every compared cell has them,
   else nominal for all (results that predate real returns).
-- Defaults were set on 10k-path runs of the user's profile: lifetime
-  ruin at the frontier is ~1-5% and years in ruin ~0.01-0.5.
 - The P10 tolerance is measured on terminal wealth (1 + return), which is
   always ≥ 0. A relative tolerance on the return itself breaks down near
   zero, where the decision model's P10s often sit.

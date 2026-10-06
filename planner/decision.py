@@ -252,6 +252,16 @@ def _ruin_weights(household: Household, retirement_age: float,
     return tuple(alive_at), tuple(years_after)
 
 
+# Converts a lifetime ruin tie into an expected-years-in-ruin tie: a path
+# ruined while someone is alive is lived in ruin for roughly this long
+# (6-9 years on the user's profile). Also the ratio of the original
+# defaults (1pp and 0.1 years).
+YEARS_PER_RUIN = 10.0
+# Differences within this many standard errors are noise, whatever the
+# tolerance says.
+NOISE_Z = 2.0
+
+
 @dataclass(frozen=True)
 class Criteria:
     """
@@ -259,13 +269,27 @@ class Criteria:
     A cell passes if its lifetime ruin probability, P(ruined while
     someone in the household is alive), is at most ruin_ceiling. Ruin
     after the horizon isn't simulated, so it doesn't count.
+
+    Ranking ties scale with the ceiling: two cells tie on lifetime ruin
+    within tie_share of the ceiling, and on years in ruin within that
+    times YEARS_PER_RUIN, or within NOISE_Z standard errors of their
+    difference if that is larger.
     """
     ruin_ceiling: float = 0.01
-    ruin_tolerance: float = 0.01      # absolute, as a fraction (1pp)
-    years_in_ruin_tolerance: float = 0.1
+    tie_share: float = 0.2
     p10_tolerance: float = 0.10       # relative, on terminal wealth
     retirement_age: float = 65.0
     household: Household = Household()
+
+    @property
+    def ruin_tolerance(self) -> float:
+        "Lifetime ruin tie, as a fraction (0.002 = 0.2pp at a 1% ceiling)."
+        return self.tie_share * self.ruin_ceiling
+
+    @property
+    def years_in_ruin_tolerance(self) -> float:
+        "Years-in-ruin tie, in years."
+        return self.ruin_tolerance * YEARS_PER_RUIN
 
     def _weights(self, cell: Cell):
         return _ruin_weights(self.household, self.retirement_age,
@@ -273,11 +297,11 @@ class Criteria:
 
     def ruin(self, cell: Cell) -> float:
         "Lifetime ruin probability: P(ruin while someone is alive)."
-        return _lifetime_ruin(cell, self)[0]
+        return _ruin_stats(cell, self)[0]
 
     def ruin_se(self, cell: Cell) -> float:
         "Standard error of ruin() from the number of paths."
-        return _lifetime_ruin(cell, self)[1]
+        return _ruin_stats(cell, self)[1]
 
     def years_in_ruin(self, cell: Cell) -> float:
         """
@@ -285,9 +309,11 @@ class Criteria:
         all paths (0 for paths that aren't ruined): an unconditional
         expected shortfall, in years.
         """
-        _, after = self._weights(cell)
-        return sum(n * y for n, y in zip(cell.ruin_histogram, after)) / (
-            cell.total_paths)
+        return _ruin_stats(cell, self)[2]
+
+    def years_in_ruin_se(self, cell: Cell) -> float:
+        "Standard error of years_in_ruin() from the number of paths."
+        return _ruin_stats(cell, self)[3]
 
     def passes(self, cell: Cell) -> bool:
         return self.ruin(cell) <= self.ruin_ceiling
@@ -298,15 +324,30 @@ class Criteria:
             2 * self.ruin_se(cell))
 
 
-@functools.lru_cache(maxsize=8192)
-def _lifetime_ruin(cell: Cell, criteria: Criteria) -> Tuple[float, float]:
-    # Each path contributes P(alive at its ruin age), or 0 if never ruined:
-    # the estimate is the mean of those, with its standard error.
-    alive, _ = criteria._weights(cell)
-    n = cell.total_paths
-    mean = sum(h * w for h, w in zip(cell.ruin_histogram, alive)) / n
-    second = sum(h * w * w for h, w in zip(cell.ruin_histogram, alive)) / n
+def _mean_and_se(histogram: Sequence[float], per_path: Sequence[float],
+                 n: int) -> Tuple[float, float]:
+    """
+    Mean over n paths of a per-path value that is per_path[m] for a path
+    ruined in month m (histogram[m] of them) and 0 otherwise, and its
+    standard error.
+    """
+    mean = sum(h * w for h, w in zip(histogram, per_path)) / n
+    second = sum(h * w * w for h, w in zip(histogram, per_path)) / n
     return mean, math.sqrt(max(second - mean * mean, 0.0) / n)
+
+
+@functools.lru_cache(maxsize=8192)
+def _ruin_stats(cell: Cell,
+                criteria: Criteria) -> Tuple[float, float, float, float]:
+    """
+    (lifetime ruin, its SE, years in ruin, its SE). Per path, lifetime
+    ruin is P(alive at the ruin age) and years in ruin the expected years
+    alive from then to the end of the horizon (both 0 if never ruined).
+    """
+    alive, after = criteria._weights(cell)
+    ruin = _mean_and_se(cell.ruin_histogram, alive, cell.total_paths)
+    years = _mean_and_se(cell.ruin_histogram, after, cell.total_paths)
+    return ruin + years
 
 
 @dataclass(frozen=True)
@@ -347,28 +388,33 @@ def _select_best(candidates: List[Cell], criteria: Criteria,
         assert value is not None
         return value
 
-    steps = [
-        ("lifetime ruin",
-         lambda c: -criteria.ruin(c),
-         lambda best: best - criteria.ruin_tolerance),
-        ("years in ruin",
-         lambda c: -criteria.years_in_ruin(c),
-         lambda best: best - criteria.years_in_ruin_tolerance),
-        # Terminal wealth multiple (1 + return) is >= 0, so a relative
-        # tolerance stays meaningful when the return itself is near zero.
-        ("P10 return",
-         lambda c: 1.0 + ret(c, 10),
-         lambda best: best * (1.0 - criteria.p10_tolerance)),
+    # Lower is better; tied with the best if within the tolerance or the
+    # noise of the difference, whichever is larger.
+    risk_steps = [
+        ("lifetime ruin", criteria.ruin, criteria.ruin_se,
+         criteria.ruin_tolerance),
+        ("years in ruin", criteria.years_in_ruin, criteria.years_in_ruin_se,
+         criteria.years_in_ruin_tolerance),
     ]
     tied_on: List[str] = []
-    for name, value, threshold in steps:
-        best = max(value(c) for c in candidates)
-        cutoff = threshold(best)
-        candidates = [c for c in candidates
-                      if value(c) >= cutoff or value(c) == best]
+    for name, value, se, tolerance in risk_steps:
+        best = min(candidates, key=value)
+        candidates = [
+            c for c in candidates
+            if value(c) - value(best) <= max(
+                tolerance, NOISE_Z * math.hypot(se(c), se(best)))]
         if len(candidates) == 1:
             return candidates[0], _explain(tied_on, name), name
         tied_on.append(name)
+
+    # Terminal wealth multiple (1 + return) is >= 0, so a relative
+    # tolerance stays meaningful when the return itself is near zero.
+    best_p10 = max(1.0 + ret(c, 10) for c in candidates)
+    cutoff = best_p10 * (1.0 - criteria.p10_tolerance)
+    candidates = [c for c in candidates if 1.0 + ret(c, 10) >= cutoff]
+    if len(candidates) == 1:
+        return candidates[0], _explain(tied_on, "P10 return"), "P10 return"
+    tied_on.append("P10 return")
     # An exact tie on P50 goes to the safer cell, not to list order.
     return (max(candidates, key=lambda c: (ret(c, 50), -criteria.ruin(c),
                                            -criteria.years_in_ruin(c))),

@@ -477,3 +477,48 @@ class TestLifetimeRuin:
         early = cell(histogram=ruined_at(12, 100, months=696))
         late = cell(histogram=ruined_at(500, 100, months=696))
         assert crit.years_in_ruin(early) > 5 * crit.years_in_ruin(late)
+
+
+class TestTolerances:
+    def test_scale_with_the_ceiling(self):
+        assert d.Criteria(ruin_ceiling=0.05).ruin_tolerance == (
+            pytest.approx(0.01))
+        crit = d.Criteria(ruin_ceiling=0.01)
+        assert crit.ruin_tolerance == pytest.approx(0.002)
+        assert crit.years_in_ruin_tolerance == pytest.approx(0.02)
+        assert d.Criteria(ruin_ceiling=0.01, tie_share=0.5).ruin_tolerance \
+            == pytest.approx(0.005)
+
+    def test_safer_cell_wins_under_a_low_ceiling(self):
+        # The test run's $110k case: 0.97% vs 0.53% lifetime ruin used to
+        # tie under a fixed 1pp tolerance, leaving P10 to pick the riskier
+        # cell. At a 1% ceiling the tie is 0.2pp, so ruin decides.
+        crit = d.Criteria(ruin_ceiling=0.01, retirement_age=42)
+        risky = cell(equity=0.7, ruin=97, paths=25_000 // 2, p10=5.0)
+        safe = cell(equity=0.5, ruin=53, paths=25_000 // 2, p10=0.0)
+        top = d.rank([risky, safe], crit)[0]
+        assert top.cell is safe
+        assert top.decided_by == "lifetime ruin"
+
+    def test_noise_is_always_a_tie(self):
+        # 0.4% vs 0.8% over 500 paths is 2 vs 4 ruined paths: far apart
+        # relative to a 0.2pp tolerance, but well within the noise.
+        crit = d.Criteria(ruin_ceiling=0.01)
+        a = cell(equity=0.5, ruin=2, paths=500, p10=0.0)
+        b = cell(equity=0.6, ruin=4, paths=500, p10=1.0)
+        assert crit.ruin(b) - crit.ruin(a) > crit.ruin_tolerance
+        top = d.rank([a, b], crit)[0]
+        assert top.cell is b
+        assert top.reason == (
+            "tied on lifetime ruin, years in ruin; won on P10 return")
+
+    def test_years_in_ruin_se(self):
+        import numpy as np
+        crit = d.Criteria(retirement_age=60, household=IMMORTAL)
+        histogram = [0] * 120
+        histogram[0], histogram[60] = 30, 50
+        c = cell(histogram=histogram, paths=400)
+        per_path = np.array([10.0] * 30 + [5.0] * 50 + [0.0] * 320)
+        assert crit.years_in_ruin(c) == pytest.approx(per_path.mean())
+        assert crit.years_in_ruin_se(c) == pytest.approx(
+            per_path.std() / np.sqrt(400))
