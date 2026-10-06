@@ -11,6 +11,7 @@ A run is launched as a detached `monte_carlo.py --job-dir` subprocess; the
 UI only ever reads the files it writes (job_files.py).
 """
 
+import dataclasses
 import datetime as dt
 import hashlib
 import json
@@ -43,15 +44,34 @@ _UNHASHED_FIELDS = ("master_seed",)
 
 @dataclass(frozen=True)
 class Profile:
-    "What every run of a review shares; see Review."
+    """
+    What every run of a review shares; see Review. The market assumptions
+    belong here rather than on a run because cells merge across a review's
+    runs: two runs under different assumptions must not be mixed. Their
+    defaults are the engine's (doc/assumptions.md), so reviews created
+    before the fields existed load with the assumptions they ran under.
+    """
     initial_nav: float
     retirement_age: float
     years_to_simulate: float
     tax_regime: str = decision.DEFAULT_TAX_REGIME
+    initial_cape: float = 34.0
+    target_cape: float = 22.0
+    annual_earnings_growth: float = 0.02
+    annual_buyback_yield: float = 0.0
+    dividend_yield: float = 0.01
 
     @property
     def terminal_age(self) -> float:
         return self.retirement_age + self.years_to_simulate
+
+    @property
+    def simulator_params(self) -> dict:
+        "The CLI's simulator_params (constructor kwargs of the models)."
+        return {"initial_cape": self.initial_cape,
+                "target_cape": self.target_cape,
+                "annual_earnings_growth": self.annual_earnings_growth,
+                "annual_buyback_yield": self.annual_buyback_yield}
 
 
 @dataclass(frozen=True)
@@ -90,6 +110,10 @@ class Review:
     date: str          # ISO date the review is for
     created_at: str
     profile: Profile
+    # Who the money must last for; weights ruin by the chance someone is
+    # alive (decision.Criteria). Unlike the profile it doesn't change what
+    # is simulated, so it can be edited after runs exist.
+    household: decision.Household = decision.Household()
 
     @property
     def id(self) -> str:
@@ -109,13 +133,47 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "review"
 
 
+def household_to_json(household: decision.Household) -> dict:
+    return {"person": asdict(household.person),
+            "partner": (asdict(household.partner)
+                        if household.partner is not None else None),
+            "partner_age_offset": household.partner_age_offset}
+
+
+def household_from_json(data: Optional[dict]) -> decision.Household:
+    "None (a review from before households existed) is the default."
+    if data is None:
+        return decision.Household()
+    partner = data.get("partner")
+    return decision.Household(
+        person=decision.Life(**data["person"]),
+        partner=decision.Life(**partner) if partner is not None else None,
+        partner_age_offset=data.get("partner_age_offset", 0.0))
+
+
+def _write_review(review: Review):
+    job_files.write_json_atomic(review.path / REVIEW_FILE, {
+        "label": review.label, "date": review.date,
+        "created_at": review.created_at, "profile": asdict(review.profile),
+        "household": household_to_json(review.household)})
+
+
 def load_review(path: Path) -> Review:
     data = job_files.read_json(path / REVIEW_FILE)
     if data is None:
         raise FileNotFoundError(path / REVIEW_FILE)
     return Review(path=path, label=data["label"], date=data["date"],
                   created_at=data["created_at"],
-                  profile=Profile(**data["profile"]))
+                  profile=Profile(**data["profile"]),
+                  household=household_from_json(data.get("household")))
+
+
+def update_household(review: Review,
+                     household: decision.Household) -> Review:
+    "Saves a review's household; its runs stay valid."
+    updated = dataclasses.replace(review, household=household)
+    _write_review(updated)
+    return updated
 
 
 def list_reviews(root: Optional[Path] = None) -> List[Review]:
@@ -130,7 +188,9 @@ def list_reviews(root: Optional[Path] = None) -> List[Review]:
 
 
 def create_review(label: str, date: dt.date, profile: Profile,
-                  root: Optional[Path] = None) -> Review:
+                  root: Optional[Path] = None,
+                  household: decision.Household = decision.Household()
+                  ) -> Review:
     root = root or reviews_root()
     root.mkdir(parents=True, exist_ok=True)
     base = f"{date.isoformat()}-{_slug(label)}"
@@ -139,10 +199,9 @@ def create_review(label: str, date: dt.date, profile: Profile,
         path, n = root / f"{base}-{n}", n + 1
     (path / "runs").mkdir(parents=True)
     review = Review(path=path, label=label, date=date.isoformat(),
-                    created_at=job_files.now_iso(), profile=profile)
-    job_files.write_json_atomic(path / REVIEW_FILE, {
-        "label": review.label, "date": review.date,
-        "created_at": review.created_at, "profile": asdict(profile)})
+                    created_at=job_files.now_iso(), profile=profile,
+                    household=household)
+    _write_review(review)
     return review
 
 
@@ -163,6 +222,8 @@ def build_config(profile: Profile, sweep: Sweep,
         "weight_increments": sweep.equity_step,
         "total_paths": sweep.total_paths,
         "models": list(sweep.models),
+        "simulator_params": profile.simulator_params,
+        "dividend_yield": profile.dividend_yield,
         # Chunking (and so every chunk's seed) depends on the worker count,
         # so it is part of what makes a run reproducible.
         "workers": workers if workers is not None else os.cpu_count(),

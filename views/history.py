@@ -14,13 +14,16 @@ if not reviews:
     st.info("Create a review in the Explorer first.")
     st.stop()
 
-crit = ui.criteria()
+real = ui.real_dollars()
+# Each review is judged under its own retirement age and household.
+crits = {r.id: ui.criteria(r) for r in reviews}
+ceiling = crits[reviews[0].id].ruin_ceiling
 
 
 def frontier_of(review: store.Review) -> decision.Frontier:
     cells = ui.model_cells(ui.merged_cells(review), decision.DECISION_MODEL,
                            review.profile.tax_regime)
-    return decision.frontier(cells, crit)
+    return decision.frontier(cells, crits[review.id])
 
 
 frontiers = {r.id: frontier_of(r) for r in reviews}
@@ -37,22 +40,25 @@ for r in reviews:
         "First failing": f.next_failing_spending,
         "Estimate": f.estimate,
         "Allocation": best.allocation if best else None,
-        "P(ruin)": best.ruin_rate * 100 if best else None,
-        "ES10 age": (decision.month_to_age(best.ruin_month_es10,
-                                           r.profile.retirement_age)
-                     if best else None),
+        "Lifetime ruin": crits[r.id].ruin(best) * 100 if best else None,
+        "Years in ruin": (crits[r.id].years_in_ruin(best)
+                          if best else None),
+        "Assumptions": ui.assumptions_caption(r.profile),
     })
 money = st.column_config.NumberColumn(format="$%,.0f")
 st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
              column_config={
                  "NAV": money, "Max spending": money,
                  "First failing": money, "Estimate": money,
-                 "P(ruin)": st.column_config.NumberColumn(format="%.2f%%"),
-                 "ES10 age": st.column_config.NumberColumn(format="%.1f"),
+                 "Lifetime ruin": st.column_config.NumberColumn(
+                     format="%.2f%%"),
+                 "Years in ruin": st.column_config.NumberColumn(
+                     format="%.3f"),
              })
 st.caption(f"Decision model {decision.DECISION_MODEL}, "
-           f"{crit.ruin_ceiling:.0%} ruin ceiling. Allocation, P(ruin) "
-           "and ES10 are for the best cell at the max spending.")
+           f"{ceiling:.0%} lifetime ruin ceiling, each review under its own "
+           "life expectancy settings. Allocation, lifetime ruin and years "
+           "in ruin are for the best cell at the max spending.")
 
 theme = ui.theme()
 dated = [r for r in reversed(reviews)
@@ -82,19 +88,38 @@ fc, fp = frontiers[current.id], frontiers[previous.id]
 def describe(f: decision.Frontier, review: store.Review) -> dict:
     best = f.best_cell.cell if f.best_cell else None
     p = review.profile
+    h = review.household
+    crit = crits[review.id]
+    r = real and best is not None and best.p10_real_return is not None
+    suffix = "" if best is None or r == real else " (nominal)"
     return {
         "NAV": ui.money(p.initial_nav),
         "Retirement age": f"{p.retirement_age:g}",
         "Terminal age": f"{p.terminal_age:g}",
         "Tax regime": p.tax_regime,
+        "Starting CAPE": f"{p.initial_cape:g}",
+        "Long-run CAPE": f"{p.target_cape:g}",
+        "Earnings growth": f"{p.annual_earnings_growth:.2%}",
+        "Buyback yield": f"{p.annual_buyback_yield:.2%}",
+        "Dividend yield": f"{p.dividend_yield:.2%}",
+        "Plan for": "one person" if h.partner is None else "a couple",
+        "Modal age at death": f"{h.person.modal_age:g}",
+        "Mortality spread": f"{h.person.dispersion:g}",
+        "Partner (age diff / modal / spread)": (
+            "—" if h.partner is None else
+            f"{h.partner_age_offset:+g} / {h.partner.modal_age:g} / "
+            f"{h.partner.dispersion:g}"),
         "Max spending": ui.money(f.best_spending),
         "Crossing estimate": ui.money(f.estimate),
         "Best allocation": best.allocation if best else "—",
-        "P(ruin)": ui.pct(best.ruin_rate) if best else "—",
-        "ES10 age": (ui.age(best.ruin_month_es10, p.retirement_age)
-                     if best else "—"),
-        "P10 return": ui.total_return(best.p10_return) if best else "—",
-        "P50 return": ui.total_return(best.p50_return) if best else "—",
+        "Lifetime ruin": ui.pct(crit.ruin(best)) if best else "—",
+        "Years in ruin": ui.years(crit.years_in_ruin(best)) if best else "—",
+        f"P10 return ({ui.dollars_label(real)})":
+            ui.total_return(best.pct_return(10, r)) + suffix
+            if best else "—",
+        f"P50 return ({ui.dollars_label(real)})":
+            ui.total_return(best.pct_return(50, r)) + suffix
+            if best else "—",
     }
 
 
@@ -116,7 +141,7 @@ if fp.best_cell:
 if curves and current.profile.retirement_age == previous.profile.retirement_age:
     st.markdown("**Survival of each review's best cell**")
     st.plotly_chart(charts.survival_curves(
-        curves, current.profile.retirement_age, crit.ruin_ceiling, theme),
+        curves, current.profile.retirement_age, theme),
         theme="streamlit")
     st.caption("A curve shifting up after a good stretch is the signal to "
                "consider raising spending.")

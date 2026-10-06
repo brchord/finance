@@ -15,7 +15,8 @@ implementation work in Claude Code.
 - Config (JSON): `initial_nav`, `retirement_age`, `years_to_simulate`,
   `yearly_spending_floor/ceil`, `spend_increments`, `equity_floor/ceil`,
   `weight_increments`, `total_paths`, `models`, `tax_regimes`,
-  `master_seed` (optional), `workers`.
+  `master_seed` (optional), `workers`, and the market assumptions
+  `simulator_params` and `dividend_yield` (doc/assumptions.md).
 - Outputs today: a raw JSON (per-path terminal NAVs, ~230 MB at 50k paths —
   the UI must never read it) and an aggregated JSON with one entry per cell.
 - Ruin timing is tracked in **months since retirement**
@@ -58,12 +59,52 @@ the user to scan tables.
 Fixed to `pre_tcja_reversion` (the biggest tax drag). The UI does not
 compare tax regimes; the field is an advanced setting at most.
 
+### Lifetime ruin and mortality
+
+Ruin only matters if someone is alive to live through it. A cell's
+**lifetime ruin probability** is P(ruined while someone in the household
+is alive): each ruined path counts by P(alive) at its ruin age, from the
+monthly `ruin_histogram`, so no engine change or re-run is needed. Ruin
+after the horizon isn't simulated, so it doesn't count.
+
+**Expected years in ruin** is the timing measure: the expected years lived
+after the money runs out, within the horizon, averaged over *all* paths
+(0 where it never does). It is the unconditional, retirement version of
+expected shortfall. It replaced ES5/ES10 ruin ages, which were
+conditional on ruin (averaged over ruined paths only): a cell that ruins
+more often but later could rank above a safer one, and on the user's
+profile they picked the riskier cell whenever they disagreed with years
+in ruin. They were removed from the UI and from the CLI's aggregated
+results; the UI derives every ruin-timing measure from
+`ruin_histogram`.
+
+Mortality is a Gompertz law per person (`decision.Life`: modal age at
+death and dispersion), set per review in the sidebar ("Life expectancy")
+and saved in `review.json`, editable after runs exist. One person by
+default; a couple uses last-survivor P(alive) with independent lifetimes
+and the partner's age difference.
+
+Default calibration (`Life()`: modal age 88, dispersion 13): a
+least-squares fit to survival from age 42 in the CDC's 2022 US life table
+for males (NVSR vol. 74 no. 2, April 2025), after letting each age's death
+rate fall 1% a year from 2022. The 1% is our assumption, standing in for
+the SSA cohort tables (not machine-accessible): a period table
+understates how long someone alive today will live, which for ruin is the
+optimistic direction. Fitted to the table as published, the curve is
+modal 83.7 / dispersion 11.7 and reproduces CDC's life expectancy at 42
+(78.3 vs 78.0); with the improvement, life expectancy at 42 is 81.9 and
+P(alive) is 46% at 85 and 18% at 95.
+
 ### Ruin ceiling
 
-- Default **5%**. Both candidate models are conservative and the tax regime
-  is worst-case, so 5% is already a cautious threshold.
+- Default **1%**, on **lifetime ruin**. Lifetime ruin runs well below
+  ruin by the end of the horizon (about 3-4x for a 42-year-old with a
+  horizon to 100): on the user's profile, the cells the earlier 5% ceiling
+  on ruin by the horizon selected had ~1% lifetime ruin, so 1% keeps
+  roughly the same risk level. 5% lifetime would allow ~14% of paths to
+  be broke by 100.
 - Adjustable in the UI. Changing it only re-evaluates results on disk.
-- A cell **passes** if the decision model's ruin rate ≤ ceiling.
+- A cell **passes** if the decision model's lifetime ruin ≤ ceiling.
 
 ### Headline: maximum sustainable spending
 
@@ -71,12 +112,13 @@ The highest spending level at which at least one allocation passes. Report:
 
 - **Bracket** (hard answer): last passing spending level and the first
   failing one, e.g. "95k ✓ / 100k ✗".
-- **Interpolated estimate** (hint): take the minimum ruin rate across
+- **Interpolated estimate** (hint): take the minimum lifetime ruin across
   allocations at each spending level, and linearly interpolate where it
   crosses the ceiling. Label it as an estimate. A wide gap between the
   bracket and the estimate suggests running a refinement.
-- Flag the result when the deciding cell's ruin rate is within ~2 standard
-  errors of the ceiling (`SE = sqrt(p(1-p)/n)`).
+- Flag the result when the deciding cell's lifetime ruin is within ~2
+  standard errors of the ceiling (the standard error of the mean of each
+  path's P(alive at ruin), 0 for unruined paths).
 
 ### Ranking passing cells
 
@@ -84,16 +126,31 @@ Lexicographic with tie tolerances. Defaults (adjustable):
 
 | Step | Criterion | Better | Tied if |
 |---|---|---|---|
-| 0 | Ruin rate | lower | within 1 percentage point |
-| 1 | ES10 ruin age | later | within 1 year |
-| 2 | P10 return | higher | within 10% relative, on terminal wealth (1 + return) |
-| 3 | P50 return | higher | — (final decider) |
+| 0 | Lifetime ruin | lower | within 20% of the ceiling (0.2pp at 1%) |
+| 1 | Expected years in ruin | fewer | within that × 10 years (0.02 years at 1%) |
+| 2 | P10 return (real) | higher | within 10% relative, on terminal wealth (1 + return) |
+| 3 | P50 return (real) | higher | — (final decider; an exact tie goes to lower lifetime ruin, then fewer years in ruin) |
 
 Notes:
-- Ruin rate still counts after the gate: 4.9% ruin with ES10 at 79 must
-  not beat 1.0% ruin with ES10 at 78. ES10 is conditional on ruin, so it
-  says nothing about *how many* paths fail.
-- A cell with zero ruined paths has no ES10; treat it as best on step 1.
+- The risk tolerances **scale with the ceiling** (one setting, "ruin
+  tie", as a share of it). Fixed tolerances sized for one ceiling break
+  at another: at a 1% ceiling a 1pp tie made every passing cell tie on
+  ruin, so ranking reduced to "pass, then highest P10" and picked the
+  riskiest passing allocation (0.97% lifetime ruin over 0.53% in the test
+  run). The ×10 converts a ruin tie into years: a path ruined while
+  someone is alive is lived in ruin ~6-9 years on the user's profile, and
+  it is the ratio of the original 1pp / 0.1-year defaults.
+- A difference within **2 standard errors** of the two cells' estimates
+  is always a tie, whatever the tolerance: below that it is simulation
+  noise.
+- Tested alternatives on 25k-path runs of the user's profile: noise-only
+  ties made ranking "minimize risk at any cost" (20/80 with a -63% real
+  median); fixed tolerances made it "maximize P10 once under the gate".
+  Scaled tolerances picked 40/60-50/50 at every frontier level.
+- Lifetime ruin still counts after the gate: a cell near the ceiling
+  must not beat a much safer one on timing or returns alone.
+- Returns are real (today's dollars) when every compared cell has them,
+  else nominal for all (results that predate real returns).
 - The P10 tolerance is measured on terminal wealth (1 + return), which is
   always ≥ 0. A relative tolerance on the return itself breaks down near
   zero, where the decision model's P10s often sit.
@@ -102,8 +159,8 @@ Notes:
   candidates within tolerance of the *best* value among the current
   candidates and drop the rest; the survivor after step 3 is the winner.
   For a full ranking, remove the winner and repeat.
-- Show *why* each cell ranks where it does, e.g. "tied on ruin and ES10,
-  won on P10".
+- Show *why* each cell ranks where it does, e.g. "tied on lifetime
+  ruin, years in ruin; won on P10 return".
 - The main use is ranking the allocations at one spending level (in
   particular at the max sustainable spending), but the same function can
   rank any set of cells.
@@ -157,8 +214,14 @@ reviews/                          # gitignored
 
 - A **review** is a NAV snapshot at a point in time. It fixes the profile
   shared by all its runs: `initial_nav`, `retirement_age`,
-  `years_to_simulate`, tax regime. The UI enforces this; runs with a
-  different profile belong in a different review.
+  `years_to_simulate`, tax regime, and the market assumptions (starting
+  and long-run CAPE, real earnings growth, net buyback yield, dividend
+  yield). The UI enforces this; runs with a different profile belong in a
+  different review. The assumptions are on the review, not the run,
+  because cells merge across a review's runs; to compare assumptions,
+  create one review per scenario and compare them in History. Reviews
+  created before the assumption fields existed load with the engine's
+  defaults, which are what they ran under.
 - A **run** is one CLI invocation (one sweep). Its folder is keyed by a hash
   of the canonicalized `config.json`, excluding `master_seed`, so re-running
   the same sweep finds the existing run. (`workers` is included: chunking,
@@ -241,13 +304,22 @@ Keep the existing aggregated shape (`initial_nav`, `years_to_simulate`,
 
 - `spending`, `allocation`, `tax_regime` (existing; add a numeric `equity`
   so the UI doesn't parse the `"60-40"` string)
-- `ruin_path_count`, `ruin_month_min`, `ruin_month_median`,
-  `ruin_month_es5`, `ruin_month_es10` (existing)
+- `ruin_path_count`. Ruin timing is only in `ruin_histogram`; the
+  statistics over ruined paths (`ruin_month_min`, `ruin_month_median`,
+  `ruin_month_es5`, `ruin_month_es10`) were removed. Older results still
+  carry them and the UI ignores them.
 - `p5_return`, `p10_return`, `p25_return`, `p50_return` (existing)
 - `ruin_histogram`: monthly counts over the horizon (new)
 - `nav_bands: {years: [0, 1, ...], p5: [], p10: [], p25: [], p50: []}`:
-  real NAV per year since retirement, year 0 = initial NAV, ruined paths
-  counted as 0 (new; `null` for results produced before it existed)
+  **nominal** NAV per year since retirement, year 0 = initial NAV, ruined
+  paths counted as 0 (`null` for results produced before it existed)
+- `real_nav_bands` (same shape) and `p5/p10/p25/p50_real_return`: the
+  same in today's dollars, each path deflated by its own simulated CPI.
+  `p*_return` are nominal.
+- `ruin_prob_by_age: {"75": p, ...}`: unconditional P(ruin before age).
+  The UI computes the same from `ruin_histogram`
+  (`decision.ruin_prob_before`), so it also works for older results.
+- Top level: `assumptions: {dividend_yield, simulator_params}`.
 
 Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 `P(solvent at month m) = 1 - cumsum(ruin_histogram)[m] / total_paths`.
@@ -263,8 +335,8 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
   ranking; the reference model is shown for context, visually secondary.
 - **Show the reasoning.** Rankings explain themselves; numbers near a
   threshold carry a noise flag.
-- **De-emphasize minimum ruin age.** It is set by a single path. Show it as
-  a detail only.
+- **No minimum ruin age.** It is set by a single path, so it reflects
+  the run's sampling more than the portfolio; it isn't shown.
 
 ## Pages
 
@@ -274,17 +346,23 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
   floor/ceil/step, equity floor/ceil/step, paths. Profile fields come from
   the review. "Run" launches a run (or reuses a cached one); progress shows
   inline.
-- **Controls:** ruin ceiling (default 5%), reference model
+- **Display:** today's dollars (default) or nominal, for every return,
+  the fan chart and History. Cells from runs that predate real figures
+  fall back to nominal, with a note.
+- **Controls:** lifetime ruin ceiling (default 1%), life expectancy
+  (per review), reference model
   (`RegimeSwitchingBootstrapSimulator` | `HybridValuationVARSimulator`),
   tie tolerances (collapsed by default).
 - **Headline:** maximum sustainable spending, as bracket + interpolated
   estimate, with the winning allocation at that level.
-- **P(ruin) vs spending chart:** one line per allocation for the decision
-  model, ceiling as a horizontal line, merged across all runs in the
+- **Lifetime ruin vs spending chart:** one line per allocation for the
+  decision model, ceiling as a horizontal line, merged across all runs in the
   review. Reference model available as a toggle or a secondary panel.
 - **Ranked table** at a selected spending level (defaults to the max
-  sustainable spending): allocation, ruin %, ruin count, ES10 age, P5, P10,
-  P50, rank explanation, and the reference model's ruin % for context.
+  sustainable spending): allocation, lifetime ruin (±95%), years in ruin,
+  P(ruin before 75/85/95) for the ages inside the horizon, ruin by the
+  end of the horizon, P10, P25, P50, paths, and the reference model's
+  lifetime ruin for context; row shade explains the rank.
 - **"Refine around frontier"**: proposes the next run, editable before
   launching (`planner.decision.propose_refinement`):
   - frontier bracketed → spending from the last passing to the first
@@ -296,9 +374,10 @@ Ruin rate = `ruin_path_count / total_paths`. Survival curve:
 ### 2. Cell detail
 
 For a selected (spending, allocation):
-- KPI cards: ruin rate (headline), ES10 and ES5 ruin age, P10 and P50
-  return; minimum ruin age as a small detail. Decision model next to the
-  reference model.
+- KPI cards: lifetime ruin (headline), years in ruin, ruin by the end
+  of the horizon, P10 and P50 return, P(ruin before 75/85/95) inside the
+  horizon. Decision model next to the reference model.
+- Survival curves show P(alive) alongside, instead of a ceiling line.
 - Survival curves: decision and reference on the same axes, the ceiling
   marked.
 - Ruin-age histogram.
@@ -307,9 +386,11 @@ For a selected (spending, allocation):
 
 ### 3. History
 
-- Timeline across reviews: max sustainable spending, plus ruin rate and
-  ES10 of the chosen cell.
-- Side-by-side diff of two reviews: profile changes and result changes.
+- Timeline across reviews: max sustainable spending, plus lifetime ruin
+  and years in ruin of the chosen cell, each review under its own
+  household settings.
+- Side-by-side diff of two reviews: profile changes (including the
+  market assumptions) and result changes.
 - Survival curve overlay of the chosen cell, current vs previous review.
   An upward shift after a good stretch is the signal to consider raising
   spending.

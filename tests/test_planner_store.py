@@ -1,3 +1,4 @@
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -75,6 +76,93 @@ class TestConfig:
         assert store.config_hash(a) == store.config_hash(b)
         c = store.build_config(PROFILE, SWEEP, workers=4, master_seed=1)
         assert store.config_hash(a) != store.config_hash(c)
+
+
+class TestAssumptions:
+    def test_defaults_are_the_engines(self):
+        # The UI must not import simulation code, so Profile restates the
+        # simulators' defaults; old reviews rely on them matching.
+        import inspect
+        from market_modelling.path_simulation import (
+            RegimeSwitchingValuationVARSimulator)
+        accepted = inspect.signature(
+            RegimeSwitchingValuationVARSimulator.__init__).parameters
+        for key, value in PROFILE.simulator_params.items():
+            assert accepted[key].default == value, key
+        assert PROFILE.dividend_yield == 0.01
+
+    def test_config_carries_them(self):
+        profile = dataclasses.replace(PROFILE, initial_cape=39.5,
+                                      annual_buyback_yield=0.015,
+                                      dividend_yield=0.012)
+        config = store.build_config(profile, SWEEP, workers=2)
+        assert config["simulator_params"] == {
+            "initial_cape": 39.5, "target_cape": 22.0,
+            "annual_earnings_growth": 0.02, "annual_buyback_yield": 0.015}
+        assert config["dividend_yield"] == 0.012
+
+    def test_they_are_part_of_the_hash(self):
+        changed = dataclasses.replace(PROFILE, target_cape=26.0)
+        assert (store.config_hash(store.build_config(PROFILE, SWEEP,
+                                                     workers=2))
+                != store.config_hash(store.build_config(changed, SWEEP,
+                                                        workers=2)))
+
+    def test_old_review_loads_with_engine_defaults(self, tmp_path):
+        # review.json written before the assumption fields existed.
+        path = tmp_path / "old"
+        (path / "runs").mkdir(parents=True)
+        job_files.write_json_atomic(path / store.REVIEW_FILE, {
+            "label": "old", "date": "2026-04-01",
+            "created_at": "2026-04-01T00:00:00",
+            "profile": {"initial_nav": 1e6, "retirement_age": 60,
+                        "years_to_simulate": 10,
+                        "tax_regime": "pre_tcja_reversion"}})
+        profile = store.load_review(path).profile
+        assert profile.simulator_params == PROFILE.simulator_params
+        assert profile.dividend_yield == 0.01
+
+    def test_round_trip(self, tmp_path):
+        profile = dataclasses.replace(PROFILE, initial_cape=39.5,
+                                      dividend_yield=0.012)
+        review = store.create_review("x", dt.date(2026, 10, 6), profile,
+                                     root=tmp_path)
+        assert store.load_review(review.path).profile == profile
+
+
+class TestHousehold:
+    COUPLE = decision.Household(
+        person=decision.Life(90.0, 11.0),
+        partner=decision.Life(93.0, 9.0), partner_age_offset=-4.0)
+
+    def test_round_trip(self, tmp_path):
+        review = store.create_review("x", dt.date(2026, 10, 6), PROFILE,
+                                     root=tmp_path, household=self.COUPLE)
+        assert store.load_review(review.path).household == self.COUPLE
+
+    def test_old_review_gets_the_default(self, tmp_path):
+        path = tmp_path / "old"
+        (path / "runs").mkdir(parents=True)
+        job_files.write_json_atomic(path / store.REVIEW_FILE, {
+            "label": "old", "date": "2026-04-01",
+            "created_at": "2026-04-01T00:00:00",
+            "profile": {"initial_nav": 1e6, "retirement_age": 60,
+                        "years_to_simulate": 10}})
+        assert store.load_review(path).household == decision.Household()
+
+    def test_update_keeps_runs_and_the_rest(self, review):
+        run = write_run(review, status(job_files.SUCCEEDED, 1))
+        updated = store.update_household(review, self.COUPLE)
+        loaded = store.load_review(review.path)
+        assert loaded == updated
+        assert (loaded.label, loaded.profile) == (review.label,
+                                                  review.profile)
+        assert [r.id for r in store.list_runs(loaded)] == [run.id]
+
+    def test_not_part_of_the_run_config(self):
+        # Mortality weighs results; it doesn't change what is simulated.
+        config = store.build_config(PROFILE, SWEEP, workers=2)
+        assert not {"household", "person", "partner"} & set(config)
 
 
 def write_run(review, status=None, age_seconds=0.0):

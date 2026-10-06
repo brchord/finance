@@ -16,7 +16,8 @@ import job_files  # noqa: E402
 from planner import store  # noqa: E402
 
 APP = str(Path(__file__).parent.parent / "app.py")
-PROFILE = store.Profile(initial_nav=1_000_000, retirement_age=60,
+# Retiring at 68 puts age 75 (one of decision.RUIN_AGES) in the horizon.
+PROFILE = store.Profile(initial_nav=1_000_000, retirement_age=68,
                         years_to_simulate=10)
 SWEEP = store.Sweep(spending_floor=60_000, spending_ceil=180_000,
                     spending_step=40_000, equity_floor=0.4, equity_ceil=0.6,
@@ -86,8 +87,9 @@ def test_cell_page(monkeypatch, reviews_with_run):
     at = run_page(monkeypatch, reviews_with_run, "views/cell.py")
     labels = [m.label for m in at.metric]
     # Decision and reference model KPI rows.
-    assert labels.count("P(ruin)") == 2
-    assert "ES10 ruin age" in labels
+    assert labels.count("Lifetime ruin") == 2
+    assert "Years in ruin" in labels
+    assert "Ruin by 78" in labels
     # Survival, fan chart (decision + reference tabs) and histogram.
     assert "NAV percentiles by age" in [h.value for h in at.subheader]
     assert len(at.tabs) == 2
@@ -96,6 +98,92 @@ def test_cell_page(monkeypatch, reviews_with_run):
 def test_history_page(monkeypatch, reviews_with_run):
     at = run_page(monkeypatch, reviews_with_run, "views/history.py")
     assert len(at.dataframe) == 2  # timeline table and review diff
+    diff = at.dataframe[1].value
+    assert "Starting CAPE" in diff.index
+    assert "P10 return (today's $)" in diff.index
+
+
+def test_cell_page_ruin_by_age(monkeypatch, reviews_with_run):
+    at = run_page(monkeypatch, reviews_with_run, "views/cell.py")
+    labels = [m.label for m in at.metric]
+    # Decision and reference model rows; 85 and 95 are past the horizon.
+    assert labels.count("P(ruin) before 75") == 2
+    assert "P(ruin) before 85" not in labels
+
+
+def test_dollars_switch(monkeypatch, reviews_with_run):
+    at = run_page(monkeypatch, reviews_with_run, "views/cell.py")
+
+    def p50():
+        return next(m.value for m in at.metric if m.label == "P50 return")
+
+    real = p50()
+    at.sidebar.radio(key="dollars").set_value("Nominal $").run()
+    assert not at.exception, at.exception
+    # The synthetic market inflates, so nominal returns are higher.
+    assert float(p50().strip("%+").replace(",", "")) > float(
+        real.strip("%+").replace(",", ""))
+    assert any("Nominal dollars" in c.value for c in at.caption)
+
+
+def test_explorer_table_columns(monkeypatch, reviews_with_run):
+    at = run_page(monkeypatch, reviews_with_run)
+    columns = list(at.dataframe[0].value.columns)
+    for column in ("Lifetime ruin", "Years in ruin", "Ruin <75",
+                   "Ruin by 78"):
+        assert column in columns
+    assert "Ruin <85" not in columns
+    assert "ES10 age" not in columns
+
+
+def test_life_expectancy_form_saves_to_the_review(monkeypatch, tmp_path,
+                                                  reviews_with_run):
+    import shutil
+    root = tmp_path / "reviews"
+    shutil.copytree(reviews_with_run, root)
+    review = store.list_reviews(root)[0]
+    at = run_page(monkeypatch, root)
+
+    def lifetime_ruin():
+        return at.dataframe[0].value["Lifetime ruin"].sum()
+
+    # The highest spending level, where paths are ruined.
+    level = at.selectbox(key=f"level_{review.id}")
+    level.set_value(max(level.options, key=lambda o: float(
+        o.strip("$").replace(",", "")))).run()
+    before = lifetime_ruin()
+    assert before > 0
+    at.sidebar.number_input(key=f"hh_m_{review.id}").set_value(100.0)
+    next(b for b in at.sidebar.button if b.label == "Save").click().run()
+    assert not at.exception, at.exception
+    saved = store.load_review(review.path).household
+    assert saved.person.modal_age == 100.0 and saved.partner is None
+    # Living longer means more of the ruined paths count.
+    assert lifetime_ruin() > before
+
+
+def test_old_results_fall_back_to_nominal(monkeypatch, tmp_path,
+                                          reviews_with_run):
+    # A copy of the test review whose results predate real metrics.
+    import json
+    import shutil
+    root = tmp_path / "reviews"
+    shutil.copytree(reviews_with_run, root)
+    for results in root.glob("*/runs/*/results.json"):
+        data = json.loads(results.read_text())
+        for entries in data["results"].values():
+            for e in entries:
+                for key in ("real_nav_bands", "p5_real_return",
+                            "p10_real_return", "p25_real_return",
+                            "p50_real_return", "ruin_prob_by_age"):
+                    e.pop(key)
+        results.write_text(json.dumps(data))
+    at = run_page(monkeypatch, root, "views/cell.py")
+    assert next(m.value for m in at.metric if m.label == "P50 return") != "—"
+    assert any("predates real" in c.value for c in at.caption)
+    assert "P(ruin) before 75" in [m.label for m in at.metric]
+    at = run_page(monkeypatch, root)
+    assert any("predate real returns" in c.value for c in at.caption)
 
 
 def test_run_button_launches_a_run(monkeypatch, tmp_path, market_cache):
