@@ -130,6 +130,41 @@ class TestAssumptions:
         assert store.load_review(review.path).profile == profile
 
 
+class TestHousehold:
+    COUPLE = decision.Household(
+        person=decision.Life(90.0, 11.0),
+        partner=decision.Life(93.0, 9.0), partner_age_offset=-4.0)
+
+    def test_round_trip(self, tmp_path):
+        review = store.create_review("x", dt.date(2026, 10, 6), PROFILE,
+                                     root=tmp_path, household=self.COUPLE)
+        assert store.load_review(review.path).household == self.COUPLE
+
+    def test_old_review_gets_the_default(self, tmp_path):
+        path = tmp_path / "old"
+        (path / "runs").mkdir(parents=True)
+        job_files.write_json_atomic(path / store.REVIEW_FILE, {
+            "label": "old", "date": "2026-04-01",
+            "created_at": "2026-04-01T00:00:00",
+            "profile": {"initial_nav": 1e6, "retirement_age": 60,
+                        "years_to_simulate": 10}})
+        assert store.load_review(path).household == decision.Household()
+
+    def test_update_keeps_runs_and_the_rest(self, review):
+        run = write_run(review, status(job_files.SUCCEEDED, 1))
+        updated = store.update_household(review, self.COUPLE)
+        loaded = store.load_review(review.path)
+        assert loaded == updated
+        assert (loaded.label, loaded.profile) == (review.label,
+                                                  review.profile)
+        assert [r.id for r in store.list_runs(loaded)] == [run.id]
+
+    def test_not_part_of_the_run_config(self):
+        # Mortality weighs results; it doesn't change what is simulated.
+        config = store.build_config(PROFILE, SWEEP, workers=2)
+        assert not {"household", "person", "partner"} & set(config)
+
+
 def write_run(review, status=None, age_seconds=0.0):
     run_dir = review.runs_dir / "abc"
     run_dir.mkdir(parents=True)

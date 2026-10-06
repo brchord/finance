@@ -12,12 +12,20 @@ GOLDEN = Path(__file__).parent / "golden" / "monte_carlo_agg.json"
 def cell(spending=100_000.0, equity=0.6, ruin=0, paths=10_000, es10=None,
          p10=1.0, p50=2.0, model=d.DECISION_MODEL, run_id="r",
          finished_at="2026-01-01T00:00:00", histogram=None):
+    """
+    Without a histogram, all `ruin` paths are ruined in month 0 of a
+    10-year horizon, when everyone is alive: lifetime ruin then equals
+    the ruin rate.
+    """
+    if histogram is None:
+        histogram = [ruin] + [0] * 119
+    ruin = int(sum(histogram))
     return d.Cell(
         model=model, spending=spending, equity=equity,
         tax_regime=d.DEFAULT_TAX_REGIME, total_paths=paths, ruin_count=ruin,
         ruin_month_min=None, ruin_month_es5=None, ruin_month_es10=es10,
         p5_return=0.0, p10_return=p10, p25_return=0.0, p50_return=p50,
-        ruin_histogram=tuple(histogram or ()), run_id=run_id,
+        ruin_histogram=tuple(histogram), run_id=run_id,
         finished_at=finished_at)
 
 
@@ -126,64 +134,104 @@ class TestCriteria:
         assert not c.near_ceiling(cell(ruin=400, paths=10_000))
 
 
+def ruined_at(month, count, months=480):
+    "A histogram with `count` ruins in `month` (age 65 + month / 12)."
+    histogram = [0] * months
+    histogram[month] = count
+    return histogram
+
+
 class TestRank:
-    criteria = d.Criteria()
+    criteria = d.Criteria()  # retirement at 65, default mortality
 
     def ranked(self, *cells):
         return d.rank(list(cells), self.criteria)
 
-    def test_large_ruin_difference_beats_es10(self):
-        # 4.9% ruin with a later ES10 must not beat 1.0% ruin.
-        risky = cell(equity=0.8, ruin=490, es10=79 * 12)
-        safe = cell(equity=0.4, ruin=100, es10=78 * 12)
+    def test_lower_lifetime_ruin_wins(self):
+        risky = cell(equity=0.8, ruin=300)
+        safe = cell(equity=0.4, ruin=100)
         top = self.ranked(risky, safe)[0]
         assert top.cell is safe
-        assert top.reason == "won on ruin rate"
-        assert top.decided_by == "ruin rate"
+        assert top.reason == "won on lifetime ruin"
+        assert top.decided_by == "lifetime ruin"
 
-    def test_es10_decides_within_ruin_tolerance(self):
-        a = cell(equity=0.5, ruin=200, es10=70 * 12)
-        b = cell(equity=0.6, ruin=250, es10=72 * 12)
-        top = self.ranked(a, b)[0]
-        assert top.cell is b
-        assert top.reason == "tied on ruin rate; won on ES10 age"
+    def test_ruin_you_likely_wont_live_to_counts_less(self):
+        # 9% of paths ruined at 100 fail a 5% ceiling on ruin by the
+        # horizon, but few people live to 100: lifetime ruin is far lower,
+        # and below 5% ruined at 65.
+        late = cell(equity=0.8, histogram=ruined_at(420, 900))
+        early = cell(equity=0.4, histogram=ruined_at(0, 500))
+        assert late.ruin_rate == 0.09
+        assert self.criteria.ruin(late) < 0.2 * late.ruin_rate
+        assert self.ranked(early, late)[0].cell is late
 
-    def test_no_ruin_is_best_es10(self):
-        a = cell(equity=0.5, ruin=0, es10=None)
-        b = cell(equity=0.6, ruin=50, es10=80 * 12)
+    def test_years_in_ruin_decides_within_ruin_tolerance(self):
+        # Same count; ruin at 85 is less likely to be lived through (and
+        # shorter) than at 65. Lifetime ruin is within 1pp, so years in
+        # ruin decides.
+        at_65 = cell(equity=0.5, histogram=ruined_at(0, 150))
+        at_85 = cell(equity=0.6, histogram=ruined_at(240, 150))
+        assert (self.criteria.ruin(at_65) - self.criteria.ruin(at_85)
+                < self.criteria.ruin_tolerance)
+        top = self.ranked(at_65, at_85)[0]
+        assert top.cell is at_85
+        assert top.reason == "tied on lifetime ruin; won on years in ruin"
+
+    def test_exact_tie_goes_to_the_safer_cell(self):
+        # 0 vs 0.5% ruin tie on both ruin steps; identical returns.
+        a = cell(equity=0.5, ruin=0)
+        b = cell(equity=0.6, ruin=50)
         assert self.ranked(b, a)[0].cell is a
+        assert self.ranked(a, b)[0].cell is a
 
     def test_p10_then_p50(self):
-        a = cell(equity=0.5, ruin=200, es10=70 * 12, p10=1.0, p50=3.0)
-        b = cell(equity=0.6, ruin=200, es10=70.5 * 12, p10=1.1, p50=5.0)
+        a = cell(equity=0.5, ruin=20, p10=1.0, p50=3.0)
+        b = cell(equity=0.6, ruin=20, p10=1.1, p50=5.0)
         # Wealth multiples 2.0 vs 2.1: within 10%, so P50 decides.
         top = self.ranked(a, b)[0]
         assert top.cell is b
-        assert top.reason == (
-            "tied on ruin rate, ES10 age, P10 return; won on P50 return")
+        assert top.reason == ("tied on lifetime ruin, years in ruin, P10 "
+                              "return; won on P50 return")
         assert top.decided_by == "P50 return"
 
-        c = cell(equity=0.7, ruin=200, es10=70 * 12, p10=2.0, p50=1.0)
+        c = cell(equity=0.7, ruin=20, p10=2.0, p50=1.0)
         top = self.ranked(a, b, c)[0]
         assert top.cell is c
-        assert top.reason == "tied on ruin rate, ES10 age; won on P10 return"
+        assert top.reason == (
+            "tied on lifetime ruin, years in ruin; won on P10 return")
+
+    def test_real_returns_when_every_cell_has_them(self):
+        # Nominal says a, real says b.
+        a = dataclasses.replace(cell(equity=0.5, ruin=20, p10=3.0),
+                                p10_real_return=0.1, p50_real_return=0.5)
+        b = dataclasses.replace(cell(equity=0.6, ruin=20, p10=1.0),
+                                p10_real_return=0.6, p50_real_return=0.5)
+        assert self.ranked(a, b)[0].cell is b
+        # One cell without real returns: everything compares nominal.
+        old = cell(equity=0.7, ruin=20, p10=0.0)
+        assert self.ranked(a, b, old)[0].cell is a
 
     def test_p10_tolerance_works_near_zero_return(self):
         # Returns of -0.02 and +0.02 are 4% apart in wealth terms: a tie.
-        a = cell(equity=0.5, ruin=200, es10=70 * 12, p10=-0.02, p50=9.0)
-        b = cell(equity=0.6, ruin=200, es10=70 * 12, p10=0.02, p50=1.0)
+        a = cell(equity=0.5, ruin=20, p10=-0.02, p50=9.0)
+        b = cell(equity=0.6, ruin=20, p10=0.02, p50=1.0)
         assert self.ranked(a, b)[0].cell is a
 
     def test_tolerances_are_anchored_to_the_best(self):
-        # a~b and b~c on ruin (within 1pp) but a and c are 1.6pp apart: c
-        # is dropped at step 0 even though it has the best ES10.
-        a = cell(equity=0.4, ruin=100, es10=60 * 12)
-        b = cell(equity=0.5, ruin=180, es10=65 * 12)
-        c = cell(equity=0.6, ruin=260, es10=90 * 12)
-        order = [r.cell for r in self.ranked(a, b, c)]
+        # a~b and b~c on lifetime ruin (within 1pp) but a and c are 1.6pp
+        # apart: c is dropped at step 0 even though, ruined at 74, it has
+        # the fewest years in ruin. a and b tie on years in ruin (within
+        # 0.1 years over a 10-year horizon), so P10 decides.
+        crit = d.Criteria(retirement_age=65)
+        a = cell(equity=0.4, ruin=100)
+        b = cell(equity=0.5, ruin=180, p10=1.5)
+        c = cell(equity=0.6, histogram=[0] * 119 + [270])
+        assert crit.years_in_ruin(c) < crit.years_in_ruin(a)
+        assert crit.ruin(c) - crit.ruin(a) > crit.ruin_tolerance
+        order = [r.cell for r in d.rank([a, b, c], crit)]
         assert order == [b, a, c]
 
-    def test_failing_cells_last_by_ruin(self):
+    def test_failing_cells_last_by_lifetime_ruin(self):
         good = cell(equity=0.5, ruin=100)
         bad = cell(equity=0.6, ruin=900)
         worse = cell(equity=0.7, ruin=1500)
@@ -332,3 +380,89 @@ class TestDollars:
         c = cell()
         assert c.pct_return(50, True) is None
         assert c.bands(True) is None
+
+
+IMMORTAL = d.Household(person=d.Life(modal_age=1_000.0, dispersion=10.0))
+
+
+class TestLife:
+    def test_default_fits_the_cdc_male_table(self):
+        # Fitted to the CDC 2022 male table with 1%/year mortality
+        # improvement, for someone alive at 42 (see Life's docstring).
+        life = d.Life()
+        assert life.life_expectancy(42) == pytest.approx(81.9, abs=0.3)
+        assert life.survival(85, 42) == pytest.approx(0.46, abs=0.02)
+        assert life.survival(95, 42) == pytest.approx(0.18, abs=0.02)
+
+    def test_survival_is_a_survival_curve(self):
+        life = d.Life()
+        assert life.survival(42, 42) == 1.0
+        assert life.survival(30, 42) == 1.0
+        values = [life.survival(a, 42) for a in range(42, 121)]
+        assert values == sorted(values, reverse=True)
+        assert values[-1] < 1e-3
+
+    def test_later_modal_age_lives_longer(self):
+        assert (d.Life(modal_age=92).life_expectancy(42)
+                > d.Life(modal_age=85).life_expectancy(42))
+
+
+class TestHousehold:
+    def test_single_is_the_persons_survival(self):
+        h = d.Household()
+        assert h.p_alive(85, 42) == h.person.survival(85, 42)
+
+    def test_couple_is_last_survivor(self):
+        person, partner = d.Life(85, 10), d.Life(90, 9)
+        h = d.Household(person=person, partner=partner,
+                        partner_age_offset=-3)
+        a = person.survival(85, 60)
+        b = partner.survival(82, 57)
+        assert h.p_alive(85, 60) == pytest.approx(1 - (1 - a) * (1 - b))
+        assert h.p_alive(85, 60) > d.Household(person=person).p_alive(85, 60)
+
+
+class TestLifetimeRuin:
+    def test_immortal_household_gives_the_ruin_rate(self):
+        crit = d.Criteria(retirement_age=60, household=IMMORTAL)
+        c = cell(histogram=ruined_at(100, 30) , paths=1_000)
+        assert crit.ruin(c) == pytest.approx(c.ruin_rate)
+        assert crit.ruin_se(c) == pytest.approx(c.ruin_rate_se)
+
+    def test_weights_each_ruin_by_p_alive(self):
+        crit = d.Criteria(retirement_age=60)
+        histogram = [0] * 480
+        histogram[60], histogram[300] = 10, 20   # ruin at 65 and at 85
+        c = cell(histogram=histogram, paths=1_000)
+        h = crit.household
+        expected = (10 * h.p_alive(65, 60) + 20 * h.p_alive(85, 60)) / 1_000
+        assert crit.ruin(c) == pytest.approx(expected)
+
+    def test_se_is_that_of_the_weighted_paths(self):
+        import numpy as np
+        crit = d.Criteria(retirement_age=60)
+        histogram = [0] * 480
+        histogram[12], histogram[400] = 40, 70
+        c = cell(histogram=histogram, paths=500)
+        h = crit.household
+        per_path = np.array([h.p_alive(61, 60)] * 40
+                            + [h.p_alive(60 + 400 / 12, 60)] * 70
+                            + [0.0] * 390)
+        assert crit.ruin(c) == pytest.approx(per_path.mean())
+        assert crit.ruin_se(c) == pytest.approx(
+            per_path.std() / np.sqrt(500))
+
+    def test_years_in_ruin_counts_time_left_in_the_horizon(self):
+        # Immortal: a path ruined in month m spends the rest of the
+        # 120-month horizon ruined.
+        crit = d.Criteria(retirement_age=60, household=IMMORTAL)
+        histogram = [0] * 120
+        histogram[0], histogram[60] = 1, 3
+        c = cell(histogram=histogram, paths=10)
+        assert crit.years_in_ruin(c) == pytest.approx((10 + 3 * 5) / 10)
+
+    def test_years_in_ruin_weighs_early_ruin_more(self):
+        crit = d.Criteria(retirement_age=42)
+        early = cell(histogram=ruined_at(12, 100, months=696))
+        late = cell(histogram=ruined_at(500, 100, months=696))
+        assert crit.years_in_ruin(early) > 5 * crit.years_in_ruin(late)

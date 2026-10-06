@@ -161,16 +161,16 @@ def headline(f: decision.Frontier, ref_f: decision.Frontier,
                   best.cell.allocation if best else "—")
         if best:
             c2.caption(
-                f"ruin {ui.pct(best.cell.ruin_rate)} · ES10 age "
-                f"{ui.age(best.cell.ruin_month_es10, review.profile.retirement_age)}"
-                f" · {best.reason}")
+                f"lifetime ruin {ui.pct(crit.ruin(best.cell))} · "
+                f"{ui.years(crit.years_in_ruin(best.cell))} in ruin · "
+                f"{best.reason}")
     c3.metric("Reference model", open_ended(ref_f),
               help=f"Max sustainable spending under {ui.reference_model()},"
                    " for context only.")
     if f.near_ceiling:
-        st.warning("The deciding cell's ruin rate is within two standard "
-                   "errors of the ceiling: it could pass or fail on a "
-                   "re-run. More paths would settle it.", icon="⚠️")
+        st.warning("The deciding cell's lifetime ruin is within two "
+                   "standard errors of the ceiling: it could pass or fail "
+                   "on a re-run. More paths would settle it.", icon="⚠️")
     if f.non_monotonic:
         st.info("A lower spending level fails while a higher one passes: "
                 "the frontier is inside the simulation noise here.",
@@ -182,17 +182,17 @@ def headline(f: decision.Frontier, ref_f: decision.Frontier,
 # stay readable on both light and dark surfaces.
 PASS_COLOR, FAIL_COLOR = "#0ca30c", "#d03b3b"
 # Passing rows: one green, deeper the more ranking steps the row stayed
-# level with the best on before the deciding one (ruin rate, then ES10
-# age, P10 return, P50 return); failing rows red. Translucent tints, with
+# level with the best on before the deciding one
+# (decision.RANKING_STEPS); failing rows red. Translucent tints, with
 # stronger steps on the dark surface, where faint ones vanish.
 TINT_ALPHAS = {
-    False: {"ruin rate": 0.06, "ES10 age": 0.14, "P10 return": 0.24,
-            "P50 return": 0.36, "fail": 0.12},
-    True: {"ruin rate": 0.13, "ES10 age": 0.26, "P10 return": 0.42,
-           "P50 return": 0.62, "fail": 0.22},
+    False: {"lifetime ruin": 0.06, "years in ruin": 0.14,
+            "P10 return": 0.24, "P50 return": 0.36, "fail": 0.12},
+    True: {"lifetime ruin": 0.13, "years in ruin": 0.26,
+           "P10 return": 0.42, "P50 return": 0.62, "fail": 0.22},
 }
-LEGEND = [("ruin rate", "won on ruin rate, or last passing"),
-          ("ES10 age", "won on ES10 age"),
+LEGEND = [("lifetime ruin", "won on lifetime ruin, or last passing"),
+          ("years in ruin", "won on years in ruin"),
           ("P10 return", "won on P10 return"),
           ("P50 return", "won on P50 return"),
           ("fail", "fails the ruin ceiling")]
@@ -208,7 +208,7 @@ def row_tint(r: decision.Ranked) -> str:
     if not r.passes:
         return tint("fail")
     # The last passing row had no contest; it shares the faintest shade.
-    return tint("ruin rate" if r.decided_by == "—" else r.decided_by)
+    return tint("lifetime ruin" if r.decided_by == "—" else r.decided_by)
 
 
 def legend():
@@ -221,9 +221,9 @@ def legend():
     st.markdown(
         f'<div style="font-size:0.85rem;line-height:2">{swatches}</div>',
         unsafe_allow_html=True,
-        help="Ranking steps run in order: ruin rate, ES10 age, P10 return, "
-             "P50 return (the ranking uses nominal returns, whichever "
-             "dollars are displayed). A row's shade shows the step that put "
+        help="Ranking steps run in order: lifetime ruin, expected years "
+             "in ruin, P10 return, P50 return (real returns, unless some "
+             "cells predate them). A row's shade shows the step that put "
              "it ahead of the rows below; it was level with the best on "
              "every earlier step, so a deeper green means it held up on "
              "more criteria.")
@@ -231,11 +231,11 @@ def legend():
 
 def ranked_table(level_cells, ref_by_key, crit, review):
     ret_age = review.profile.retirement_age
-    ages = decision.ruin_ages(ret_age, review.profile.terminal_age)
+    terminal = review.profile.terminal_age
+    ages = decision.ruin_ages(ret_age, terminal)
     # Results from before real returns existed fall back to nominal, for
     # the whole table so its columns stay comparable.
-    real = ui.real_dollars() and all(c.p10_real_return is not None
-                                     for c in level_cells)
+    real = ui.real_dollars() and decision.uses_real_returns(level_cells)
     ranked = decision.rank(level_cells, crit)
     rows = []
     for r in ranked:
@@ -247,16 +247,17 @@ def ranked_table(level_cells, ref_by_key, crit, review):
             "Rank": r.rank,
             "Allocation": c.allocation,
             "Passes": "✓" if r.passes else "✗",
-            "P(ruin)": c.ruin_rate * 100,
-            # Half-width of the 95% confidence interval of P(ruin).
-            "±95%": 1.96 * c.ruin_rate_se * 100,
-            "Paths": c.total_paths,
+            "Lifetime ruin": crit.ruin(c) * 100,
+            # Half-width of the 95% confidence interval of lifetime ruin.
+            "±95%": 1.96 * crit.ruin_se(c) * 100,
+            "Years in ruin": crit.years_in_ruin(c),
             **by_age,
-            "ES10 age": decision.month_to_age(c.ruin_month_es10, ret_age),
+            f"Ruin by {terminal:g}": c.ruin_rate * 100,
             "P10 return": c.pct_return(10, real) * 100,
             "P25 return": c.pct_return(25, real) * 100,
             "P50 return": c.pct_return(50, real) * 100,
-            "Ref. P(ruin)": ref.ruin_rate * 100 if ref else None,
+            "Paths": c.total_paths,
+            "Ref. lifetime ruin": crit.ruin(ref) * 100 if ref else None,
         })
     df = pd.DataFrame(rows)
     tints = [f"background-color: {row_tint(r)}" for r in ranked]
@@ -270,22 +271,31 @@ def ranked_table(level_cells, ref_by_key, crit, review):
         column_config={
             "Rank": st.column_config.NumberColumn(width="small"),
             "Passes": st.column_config.TextColumn(width="small"),
-            "P(ruin)": st.column_config.NumberColumn(format="%.2f%%"),
+            "Lifetime ruin": st.column_config.NumberColumn(
+                format="%.2f%%",
+                help="P(ruined while still alive): each ruined path counts "
+                     "by the chance you're alive at that age. This is "
+                     "what the ceiling applies to."),
             "±95%": st.column_config.NumberColumn(
                 format="±%.2f%%",
-                help="95% confidence interval of P(ruin), from the number "
-                     "of paths: the true ruin rate is likely within this "
-                     "margin of the estimate."),
+                help="95% confidence interval of lifetime ruin, from the "
+                     "number of paths: the true value is likely within "
+                     "this margin of the estimate."),
+            "Years in ruin": st.column_config.NumberColumn(
+                format="%.3f",
+                help="Expected years lived after the money runs out, "
+                     "averaged over all paths (0 where it never does). "
+                     "Earlier ruin weighs more."),
+            f"Ruin by {terminal:g}": st.column_config.NumberColumn(
+                format="%.2f%%",
+                help="Share of all paths ruined by the end of the "
+                     "horizon, whether or not you'd still be alive."),
             "Paths": st.column_config.NumberColumn(
                 format="localized",
                 help="Paths simulated for this cell. Cells merged from "
                      "different runs can differ."),
-            "Ref. P(ruin)": st.column_config.NumberColumn(
+            "Ref. lifetime ruin": st.column_config.NumberColumn(
                 format="%.2f%%", help=ui.reference_model()),
-            "ES10 age": st.column_config.NumberColumn(
-                format="%.1f",
-                help="Mean age at ruin of the earliest 10% of ruined paths."
-                     " Empty when no path is ruined."),
             **{f"Ruin <{a}": st.column_config.NumberColumn(
                 format="%.2f%%",
                 help=f"Share of all paths ruined before age {a}.")
@@ -382,7 +392,7 @@ else:
 if not has_results:
     st.stop()
 
-crit = ui.criteria()
+crit = ui.criteria(review)
 tax_regime = review.profile.tax_regime
 cells = ui.model_cells(merged, decision.DECISION_MODEL, tax_regime)
 ref_cells = ui.model_cells(merged, ui.reference_model(), tax_regime)
@@ -397,25 +407,25 @@ headline(f, ref_f, crit, review)
 theme = ui.theme()
 show_ref = st.toggle("Show the reference model", value=False,
                      disabled=not ref_cells)
-y_max = max(c.ruin_rate for c in cells + (ref_cells if show_ref else []))
+y_max = max(crit.ruin(c) for c in cells + (ref_cells if show_ref else []))
 # Capped at 3x the ceiling: the decision happens near it, and high-spending
 # levels far above it would otherwise squash that region.
 y_max = min(max(y_max, crit.ruin_ceiling), 3 * crit.ruin_ceiling) * 1.08
 equities = [c.equity for c in merged.values()]
 equity_range = (min(equities), max(equities))
 fig = charts.ruin_vs_spending(
-    cells, crit.ruin_ceiling, theme, best_spending=f.best_spending,
+    cells, crit.ruin_ceiling, theme, crit.ruin, best_spending=f.best_spending,
     y_max=y_max, equity_range=equity_range)
 if show_ref and ref_cells:
     c1, c2 = st.columns(2)
-    c1.markdown(f"**P(ruin) · {decision.DECISION_MODEL}**")
+    c1.markdown(f"**Lifetime ruin · {decision.DECISION_MODEL}**")
     c1.plotly_chart(fig, theme="streamlit")
-    c2.markdown(f"**P(ruin) · {ui.reference_model()}** (reference)")
+    c2.markdown(f"**Lifetime ruin · {ui.reference_model()}** (reference)")
     c2.plotly_chart(charts.ruin_vs_spending(
-        ref_cells, crit.ruin_ceiling, theme, y_max=y_max,
+        ref_cells, crit.ruin_ceiling, theme, crit.ruin, y_max=y_max,
         equity_range=equity_range), theme="streamlit")
 else:
-    st.markdown(f"**P(ruin) · {decision.DECISION_MODEL}**")
+    st.markdown(f"**Lifetime ruin · {decision.DECISION_MODEL}**")
     st.plotly_chart(fig, theme="streamlit")
 
 levels = sorted({c.spending for c in cells})

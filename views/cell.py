@@ -20,10 +20,12 @@ if not cells:
     st.info("This review has no results yet. Run a sweep in the Explorer.")
     st.stop()
 
-crit = ui.criteria()
+crit = ui.criteria(review)
 ret_age = review.profile.retirement_age
+terminal = review.profile.terminal_age
+household = review.household
 real = ui.real_dollars()
-ages = decision.ruin_ages(ret_age, review.profile.terminal_age)
+ages = decision.ruin_ages(ret_age, terminal)
 ref_model = ui.reference_model()
 by_key = {(c.spending, c.equity): c for c in cells}
 ref_by_key = {(c.spending, c.equity): c
@@ -59,15 +61,18 @@ def kpis(title: str, c: decision.Cell):
     r = real and c.p10_real_return is not None
     k = st.columns(5)
     passes = crit.passes(c)
-    k[0].metric("P(ruin)", ui.pct(c.ruin_rate),
+    k[0].metric("Lifetime ruin", ui.pct(crit.ruin(c)),
                 delta="passes" if passes else "fails ceiling",
                 delta_color="normal" if passes else "inverse",
-                delta_arrow="off")
-    k[1].metric("ES10 ruin age", ui.age(c.ruin_month_es10, ret_age),
-                help="Mean age at ruin of the earliest 10% of ruined "
-                     "paths. Conditional on ruin: it says nothing about "
-                     "how many paths are ruined.")
-    k[2].metric("ES5 ruin age", ui.age(c.ruin_month_es5, ret_age))
+                delta_arrow="off",
+                help="P(ruined while still alive). The ceiling applies "
+                     "to this.")
+    k[1].metric("Years in ruin", ui.years(crit.years_in_ruin(c)),
+                help="Expected years lived after the money runs out, "
+                     "averaged over all paths (0 where it never does).")
+    k[2].metric(f"Ruin by {terminal:g}", ui.pct(c.ruin_rate),
+                help="Share of all paths ruined by the end of the "
+                     "horizon, whether or not you'd still be alive.")
     k[3].metric("P10 return", ui.total_return(c.pct_return(10, r)),
                 help=f"Total return over the horizon, "
                      f"{ui.dollars_label(r)}.")
@@ -83,6 +88,10 @@ def kpis(title: str, c: decision.Cell):
     note = "" if r == real else " (this run predates real returns)"
     st.caption(f"{c.ruin_count:,} ruined paths · earliest ruin at age "
                f"{ui.age(c.ruin_month_min, ret_age)} (a single path; noisy)"
+               f" · ES10 / ES5 ruin age "
+               f"{ui.age(c.ruin_month_es10, ret_age)} / "
+               f"{ui.age(c.ruin_month_es5, ret_age)} (among ruined paths "
+               f"only)"
                f" · P5 return {ui.total_return(c.pct_return(5, r))}"
                f" · P25 return {ui.total_return(c.pct_return(25, r))}"
                f" · returns in {ui.dollars_label(r)}{note}")
@@ -100,8 +109,13 @@ st.subheader("Survival")
 curves = [(decision.DECISION_MODEL, cell, theme.series_1)]
 if ref is not None:
     curves.append((f"{ref_model} (reference)", ref, theme.series_2))
-st.plotly_chart(charts.survival_curves(curves, ret_age, crit.ruin_ceiling,
-                                       theme), theme="streamlit")
+st.plotly_chart(charts.survival_curves(
+    curves, ret_age, theme,
+    alive=lambda a: household.p_alive(a, ret_age)),
+    theme="streamlit")
+st.caption("Solvency by age, with P(alive) for comparison: a ruin counts "
+           "toward lifetime ruin in proportion to the chance you're alive "
+           "when it happens.")
 
 st.subheader("NAV percentiles by age")
 fan_models = [(decision.DECISION_MODEL, cell)]

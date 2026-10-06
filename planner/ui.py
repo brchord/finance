@@ -62,13 +62,16 @@ def model_cells(merged: Dict[decision.CellKey, decision.Cell], model: str,
 # Sidebar
 
 
-def criteria() -> decision.Criteria:
+def criteria(review: store.Review) -> decision.Criteria:
+    "The sidebar's decision settings, for review's profile and household."
     s = st.session_state
     return decision.Criteria(
         ruin_ceiling=s.get("ceiling_pct", 5.0) / 100,
         ruin_tolerance=s.get("ruin_tol_pp", 1.0) / 100,
-        es10_tolerance_years=s.get("es10_tol_years", 1.0),
-        p10_tolerance=s.get("p10_tol_pct", 10.0) / 100)
+        years_in_ruin_tolerance=s.get("yir_tol_years", 0.1),
+        p10_tolerance=s.get("p10_tol_pct", 10.0) / 100,
+        retirement_age=review.profile.retirement_age,
+        household=review.household)
 
 
 def real_dollars() -> bool:
@@ -148,15 +151,16 @@ def new_review_dialog(latest: Optional[store.Review]):
         if terminal_age <= retirement_age:
             st.error("Terminal age must be after the retirement age.")
             return
+        profile = store.Profile(
+            initial_nav=nav, retirement_age=retirement_age,
+            years_to_simulate=terminal_age - retirement_age,
+            tax_regime=tax_regime, initial_cape=initial_cape,
+            target_cape=target_cape, annual_earnings_growth=growth / 100,
+            annual_buyback_yield=buybacks / 100,
+            dividend_yield=dividends / 100)
         review = store.create_review(
-            label or date.isoformat(), date,
-            store.Profile(initial_nav=nav, retirement_age=retirement_age,
-                          years_to_simulate=terminal_age - retirement_age,
-                          tax_regime=tax_regime, initial_cape=initial_cape,
-                          target_cape=target_cape,
-                          annual_earnings_growth=growth / 100,
-                          annual_buyback_yield=buybacks / 100,
-                          dividend_yield=dividends / 100))
+            label or date.isoformat(), date, profile,
+            household=latest.household if latest else decision.Household())
         st.session_state[PENDING_REVIEW] = review.id
         st.rerun()
 
@@ -196,24 +200,88 @@ def sidebar():
                  "fall back to nominal.")
 
         st.subheader("Decision")
-        st.number_input("Ruin ceiling (%)", min_value=0.1, max_value=50.0,
-                        step=0.5, value=5.0, key="ceiling_pct",
-                        help="A cell passes if the decision model's ruin "
-                             "rate is at or below this.")
+        st.number_input("Lifetime ruin ceiling (%)", min_value=0.1,
+                        max_value=50.0, step=0.5, value=5.0,
+                        key="ceiling_pct",
+                        help="A cell passes if the decision model's "
+                             "lifetime ruin probability (ruined while "
+                             "still alive) is at or below this. It is "
+                             "lower than ruin by the end of the horizon, "
+                             "so a given ceiling is looser than the same "
+                             "ceiling on that.")
         st.selectbox(
             "Reference model", decision.REFERENCE_MODELS,
             key="reference_model",
             help=f"Shown for context. Decisions always use "
                  f"{decision.DECISION_MODEL}. New runs simulate the "
                  f"selected reference model.")
+        review = selected_review()
+        if review is not None:
+            with st.expander("Life expectancy"):
+                household_form(review)
         with st.expander("Ranking tolerances"):
             st.number_input("Ruin rate tie (pp)", min_value=0.0, step=0.25,
                             value=1.0, key="ruin_tol_pp")
-            st.number_input("ES10 age tie (years)", min_value=0.0,
-                            step=0.5, value=1.0, key="es10_tol_years")
+            st.number_input("Years-in-ruin tie (years)", min_value=0.0,
+                            step=0.05, value=0.1, key="yir_tol_years")
             st.number_input("P10 tie (% of terminal wealth)",
                             min_value=0.0, step=1.0, value=10.0,
                             key="p10_tol_pct")
+
+
+def household_form(review: store.Review):
+    """
+    Edits the selected review's household (saved to review.json). Keys
+    are per review so switching reviews shows that review's values.
+    """
+    h = review.household
+    default = decision.Life()
+    k = review.id
+    ret_age = review.profile.retirement_age
+    st.caption(
+        "Ruin counts by the chance someone is still alive then. Defaults "
+        f"fit US male mortality ({default.modal_age:g} / "
+        f"{default.dispersion:g}; see the design doc). Saved with the "
+        "review; no re-run needed.")
+    with st.form(f"household_{k}", border=False):
+        couple = st.radio("Plan for", ["One person", "A couple"],
+                          index=0 if h.partner is None else 1,
+                          horizontal=True, key=f"hh_couple_{k}")
+        c1, c2 = st.columns(2)
+        modal = c1.number_input(
+            "Most likely age at death", min_value=60.0, max_value=110.0,
+            step=0.5, value=float(h.person.modal_age), key=f"hh_m_{k}",
+            help="Gompertz modal age. Raise it for good health or long "
+                 "family lifespans.")
+        spread = c2.number_input(
+            "Spread (years)", min_value=4.0, max_value=20.0, step=0.5,
+            value=float(h.person.dispersion), key=f"hh_b_{k}",
+            help="How spread out ages at death are around the modal age.")
+        partner = h.partner or h.person
+        st.markdown("**Partner** (used when planning for a couple)")
+        c1, c2, c3 = st.columns(3)
+        offset = c1.number_input(
+            "Age difference", min_value=-40.0, max_value=40.0, step=1.0,
+            value=float(h.partner_age_offset), key=f"hh_off_{k}",
+            help="Partner's age minus yours.")
+        p_modal = c2.number_input(
+            "Modal age", min_value=60.0, max_value=110.0, step=0.5,
+            value=float(partner.modal_age), key=f"hh_pm_{k}")
+        p_spread = c3.number_input(
+            "Spread", min_value=4.0, max_value=20.0, step=0.5,
+            value=float(partner.dispersion), key=f"hh_pb_{k}")
+        if st.form_submit_button("Save"):
+            store.update_household(review, decision.Household(
+                person=decision.Life(modal, spread),
+                partner=(decision.Life(p_modal, p_spread)
+                         if couple == "A couple" else None),
+                partner_age_offset=offset))
+            st.rerun()
+    life = h.person.life_expectancy(ret_age)
+    st.caption(f"Life expectancy from {ret_age:g}: {life:.1f} · alive at "
+               f"85: {h.p_alive(85, ret_age):.0%} · at 95: "
+               f"{h.p_alive(95, ret_age):.0%}"
+               + (" (either partner)" if h.partner is not None else ""))
 
 
 # --------------------------------------------------------------------------
@@ -239,6 +307,11 @@ def md_money(x: Optional[float]) -> str:
 
 def pct(x: Optional[float], digits: int = 2) -> str:
     return "—" if x is None else f"{x:.{digits}%}"
+
+
+def years(x: float) -> str:
+    "Expected years in ruin, e.g. 0.08 yr."
+    return f"{x:.2f} yr"
 
 
 def age(month: Optional[float], retirement_age: float) -> str:

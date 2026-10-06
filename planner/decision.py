@@ -7,6 +7,7 @@ a ruin-rate ceiling, finding the maximum sustainable spending and ranking
 cells. See doc/plans/UI Design.md, "Decision model".
 """
 
+import functools
 import math
 from dataclasses import dataclass, field
 from itertools import accumulate
@@ -181,22 +182,135 @@ def merge_cells(cells: Iterable[Cell]) -> Dict[CellKey, Cell]:
 
 
 @dataclass(frozen=True)
+class Life:
+    """
+    One person's mortality, as a Gompertz law: the force of mortality
+    grows exponentially with age, with modal_age the most likely age at
+    death and dispersion (years) how spread out deaths are around it.
+
+    The defaults fit the CDC's 2022 US life table for males (NVSR vol. 74
+    no. 2) for someone alive at 42, after letting death rates fall 1% a
+    year from 2022 (the table is a period table: it understates how long
+    people alive today will live). Without the improvement the fit is
+    modal_age 83.7, dispersion 11.7. See doc/plans/UI Design.md.
+    """
+    modal_age: float = 88.0
+    dispersion: float = 13.0
+
+    def survival(self, age: float, from_age: float) -> float:
+        "P(alive at age | alive at from_age)."
+        if age <= from_age:
+            return 1.0
+        b = self.dispersion
+        return math.exp(math.exp((from_age - self.modal_age) / b)
+                        * (1.0 - math.exp((age - from_age) / b)))
+
+    def life_expectancy(self, from_age: float) -> float:
+        "Expected age at death given alive at from_age."
+        step, age, total = 1.0 / 12.0, from_age, 0.0
+        while True:
+            alive = self.survival(age + step / 2, from_age)
+            if alive < 1e-9:
+                return from_age + total
+            total += alive * step
+            age += step
+
+
+@dataclass(frozen=True)
+class Household:
+    """
+    Who the money has to last for. Ruin matters while anyone is alive:
+    for a couple, P(alive) is the last-survivor probability, assuming
+    independent lifetimes. partner_age_offset is the partner's age minus
+    the planner's, so the partner is retirement_age + offset when the
+    simulation starts.
+    """
+    person: Life = Life()
+    partner: Optional[Life] = None
+    partner_age_offset: float = 0.0
+
+    def p_alive(self, age: float, from_age: float) -> float:
+        "P(someone in the household alive when the planner is `age`)."
+        alive = self.person.survival(age, from_age)
+        if self.partner is None:
+            return alive
+        partner = self.partner.survival(age + self.partner_age_offset,
+                                        from_age + self.partner_age_offset)
+        return 1.0 - (1.0 - alive) * (1.0 - partner)
+
+
+@functools.lru_cache(maxsize=64)
+def _ruin_weights(household: Household, retirement_age: float,
+                  months: int) -> Tuple[Tuple[float, ...],
+                                        Tuple[float, ...]]:
+    """
+    Per ruin month m (ruin at age retirement_age + m / 12, the
+    ruin_histogram convention): P(someone alive then), and the expected
+    years someone is alive from then to the end of the horizon.
+    """
+    alive_at = [household.p_alive(retirement_age + m / 12.0,
+                                  retirement_age) for m in range(months)]
+    mid = [household.p_alive(retirement_age + (m + 0.5) / 12.0,
+                             retirement_age) / 12.0 for m in range(months)]
+    years_after = list(accumulate(reversed(mid)))[::-1]
+    return tuple(alive_at), tuple(years_after)
+
+
+@dataclass(frozen=True)
 class Criteria:
     """
-    Ruin ceiling and ranking tie tolerances (doc/plans/UI Design.md,
-    "Ranking passing cells").
+    The gate and the ranking (doc/plans/UI Design.md, "Decision model").
+    A cell passes if its lifetime ruin probability, P(ruined while
+    someone in the household is alive), is at most ruin_ceiling. Ruin
+    after the horizon isn't simulated, so it doesn't count.
     """
     ruin_ceiling: float = 0.05
     ruin_tolerance: float = 0.01      # absolute, as a fraction (1pp)
-    es10_tolerance_years: float = 1.0
+    years_in_ruin_tolerance: float = 0.1
     p10_tolerance: float = 0.10       # relative, on terminal wealth
+    retirement_age: float = 65.0
+    household: Household = Household()
+
+    def _weights(self, cell: Cell):
+        return _ruin_weights(self.household, self.retirement_age,
+                             len(cell.ruin_histogram))
+
+    def ruin(self, cell: Cell) -> float:
+        "Lifetime ruin probability: P(ruin while someone is alive)."
+        return _lifetime_ruin(cell, self)[0]
+
+    def ruin_se(self, cell: Cell) -> float:
+        "Standard error of ruin() from the number of paths."
+        return _lifetime_ruin(cell, self)[1]
+
+    def years_in_ruin(self, cell: Cell) -> float:
+        """
+        Expected years lived after ruin, within the horizon, averaged over
+        all paths (0 for paths that aren't ruined): an unconditional
+        expected shortfall, in years.
+        """
+        _, after = self._weights(cell)
+        return sum(n * y for n, y in zip(cell.ruin_histogram, after)) / (
+            cell.total_paths)
 
     def passes(self, cell: Cell) -> bool:
-        return cell.ruin_rate <= self.ruin_ceiling
+        return self.ruin(cell) <= self.ruin_ceiling
 
     def near_ceiling(self, cell: Cell) -> bool:
-        "Ruin rate within 2 standard errors of the ceiling."
-        return abs(cell.ruin_rate - self.ruin_ceiling) <= 2 * cell.ruin_rate_se
+        "Lifetime ruin within 2 standard errors of the ceiling."
+        return abs(self.ruin(cell) - self.ruin_ceiling) <= (
+            2 * self.ruin_se(cell))
+
+
+@functools.lru_cache(maxsize=8192)
+def _lifetime_ruin(cell: Cell, criteria: Criteria) -> Tuple[float, float]:
+    # Each path contributes P(alive at its ruin age), or 0 if never ruined:
+    # the estimate is the mean of those, with its standard error.
+    alive, _ = criteria._weights(cell)
+    n = cell.total_paths
+    mean = sum(h * w for h, w in zip(cell.ruin_histogram, alive)) / n
+    second = sum(h * w * w for h, w in zip(cell.ruin_histogram, alive)) / n
+    return mean, math.sqrt(max(second - mean * mean, 0.0) / n)
 
 
 @dataclass(frozen=True)
@@ -205,21 +319,26 @@ class Ranked:
     rank: int            # 1-based
     passes: bool
     reason: str
-    # The ranking step that separated this cell from the rest ("ruin
-    # rate", "ES10 age", "P10 return" or "P50 return"); every earlier step
-    # was a tie. "—" for the last passing cell, "ceiling" for failing ones.
+    # The ranking step that separated this cell from the rest (one of
+    # RANKING_STEPS); every earlier step was a tie. "—" for the last
+    # passing cell, "ceiling" for failing ones.
     decided_by: str
 
 
-def _es10_years(cell: Cell) -> float:
-    # No ruined path at all is the best possible ES10.
-    if cell.ruin_month_es10 is None:
-        return math.inf
-    return cell.ruin_month_es10 / 12.0
+RANKING_STEPS = ("lifetime ruin", "years in ruin", "P10 return",
+                 "P50 return")
 
 
-def _select_best(candidates: List[Cell],
-                 criteria: Criteria) -> Tuple[Cell, str, str]:
+def uses_real_returns(cells: Iterable[Cell]) -> bool:
+    """
+    Whether cells can be compared on real returns: all of them have them.
+    Otherwise (results that predate them) nominal returns are used.
+    """
+    return all(c.p10_real_return is not None for c in cells)
+
+
+def _select_best(candidates: List[Cell], criteria: Criteria,
+                 real: bool) -> Tuple[Cell, str, str]:
     """
     Anchored lexicographic selection: at each step keep only the
     candidates within tolerance of the best value among those remaining.
@@ -227,17 +346,22 @@ def _select_best(candidates: List[Cell],
     the highest P50 return wins. Returns the winner, an explanation and
     the deciding step's name.
     """
+    def ret(c: Cell, q: int) -> float:
+        value = c.pct_return(q, real)
+        assert value is not None
+        return value
+
     steps = [
-        ("ruin rate",
-         lambda c: -c.ruin_rate,
+        ("lifetime ruin",
+         lambda c: -criteria.ruin(c),
          lambda best: best - criteria.ruin_tolerance),
-        ("ES10 age",
-         _es10_years,
-         lambda best: best - criteria.es10_tolerance_years),
+        ("years in ruin",
+         lambda c: -criteria.years_in_ruin(c),
+         lambda best: best - criteria.years_in_ruin_tolerance),
         # Terminal wealth multiple (1 + return) is >= 0, so a relative
         # tolerance stays meaningful when the return itself is near zero.
         ("P10 return",
-         lambda c: 1.0 + c.p10_return,
+         lambda c: 1.0 + ret(c, 10),
          lambda best: best * (1.0 - criteria.p10_tolerance)),
     ]
     tied_on: List[str] = []
@@ -249,7 +373,9 @@ def _select_best(candidates: List[Cell],
         if len(candidates) == 1:
             return candidates[0], _explain(tied_on, name), name
         tied_on.append(name)
-    return (max(candidates, key=lambda c: c.p50_return),
+    # An exact tie on P50 goes to the safer cell, not to list order.
+    return (max(candidates, key=lambda c: (ret(c, 50), -criteria.ruin(c),
+                                           -criteria.years_in_ruin(c))),
             _explain(tied_on, "P50 return"), "P50 return")
 
 
@@ -263,24 +389,27 @@ def rank(cells: Sequence[Cell], criteria: Criteria) -> List[Ranked]:
     """
     Ranks cells: passing cells first, ordered by repeated anchored
     selection (pick the best, remove it, repeat), then failing cells by
-    ascending ruin rate.
+    ascending lifetime ruin. Returns are real when every cell has them
+    (uses_real_returns), else nominal.
     """
+    real = uses_real_returns(cells)
     passing = [c for c in cells if criteria.passes(c)]
     failing = sorted((c for c in cells if not criteria.passes(c)),
-                     key=lambda c: c.ruin_rate)
+                     key=criteria.ruin)
     ranked: List[Ranked] = []
     while passing:
         if len(passing) == 1:
             winner, reason, decided_by = (
                 passing[0], "last passing cell", "—")
         else:
-            winner, reason, decided_by = _select_best(passing, criteria)
+            winner, reason, decided_by = _select_best(passing, criteria,
+                                                      real)
         ranked.append(Ranked(winner, len(ranked) + 1, True, reason,
                              decided_by))
         passing.remove(winner)
     for cell in failing:
         ranked.append(Ranked(cell, len(ranked) + 1, False,
-                             "ruin rate above ceiling", "ceiling"))
+                             "lifetime ruin above ceiling", "ceiling"))
     return ranked
 
 
@@ -301,7 +430,7 @@ class Frontier:
     # A failing level below best_spending: the frontier isn't monotonic,
     # which at these path counts means noise around the ceiling.
     non_monotonic: bool
-    # Min ruin rate across allocations, per spending level.
+    # Min lifetime ruin across allocations, per spending level.
     min_ruin_by_spending: Dict[float, float]
 
 
@@ -310,7 +439,7 @@ def frontier(cells: Sequence[Cell], criteria: Criteria) -> Frontier:
     by_spending: Dict[float, List[Cell]] = {}
     for cell in cells:
         by_spending.setdefault(cell.spending, []).append(cell)
-    min_ruin = {s: min(c.ruin_rate for c in group)
+    min_ruin = {s: min(criteria.ruin(c) for c in group)
                 for s, group in sorted(by_spending.items())}
     passing_levels = [s for s, r in min_ruin.items()
                       if r <= criteria.ruin_ceiling]

@@ -8,7 +8,7 @@ with separately chosen steps for dark mode.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import plotly.graph_objects as go
 
@@ -87,11 +87,15 @@ def _ceiling_line(fig: go.Figure, y: float, label: str, theme: Theme,
 
 def ruin_vs_spending(cells: Sequence[decision.Cell], ceiling: float,
                      theme: Theme,
+                     ruin: Callable[[decision.Cell], float],
                      best_spending: Optional[float] = None,
                      y_max: Optional[float] = None,
                      equity_range: Tuple[float, float] = (0.0, 1.0)
                      ) -> go.Figure:
-    "P(ruin) against spending, one line per equity allocation."
+    """
+    The gated ruin measure (ruin, e.g. Criteria.ruin) against spending,
+    one line per equity allocation.
+    """
     by_equity: Dict[float, List[decision.Cell]] = {}
     for c in cells:
         by_equity.setdefault(c.equity, []).append(c)
@@ -102,14 +106,14 @@ def ruin_vs_spending(cells: Sequence[decision.Cell], ceiling: float,
         color = equity_color(equity, theme, equity_range)
         fig.add_trace(go.Scatter(
             x=[c.spending for c in line],
-            y=[c.ruin_rate for c in line],
+            y=[ruin(c) for c in line],
             name=line[0].allocation,
             mode="lines+markers",
             line=dict(color=color, width=2),
             marker=dict(color=color, size=8),
-            customdata=[[c.ruin_count, c.total_paths] for c in line],
-            hovertemplate=("%{y:.2%} (%{customdata[0]:,} of "
-                           "%{customdata[1]:,} paths)")))
+            customdata=[[c.ruin_rate] for c in line],
+            hovertemplate=("%{y:.2%} while alive · %{customdata[0]:.1%} "
+                           "by the horizon")))
     _base_layout(fig, theme)
     _ceiling_line(fig, ceiling, f"{ceiling:.0%} ceiling", theme)
     if best_spending is not None:
@@ -118,16 +122,20 @@ def ruin_vs_spending(cells: Sequence[decision.Cell], ceiling: float,
     fig.update_layout(legend_title_text="Equity/FI  ")
     fig.update_xaxes(title_text="Yearly spending", tickprefix="$",
                      tickformat=",.0f")
-    fig.update_yaxes(title_text="P(ruin)", tickformat=".0%",
+    fig.update_yaxes(title_text="P(ruin while alive)", tickformat=".0%",
                      rangemode="tozero",
                      range=[0, y_max] if y_max is not None else None)
     return fig
 
 
 def survival_curves(curves: Sequence[tuple], retirement_age: float,
-                    ceiling: float, theme: Theme) -> go.Figure:
+                    theme: Theme,
+                    alive: Optional[Callable[[float], float]] = None
+                    ) -> go.Figure:
     """
     P(solvent) by age. curves: (name, cell, color) tuples, drawn in order.
+    alive(age), if given, is drawn as P(alive) for context: ruin matters
+    in proportion to it.
     """
     fig = go.Figure()
     for name, cell, color in curves:
@@ -137,10 +145,18 @@ def survival_curves(curves: Sequence[tuple], retirement_age: float,
             y=survival, name=name, mode="lines",
             line=dict(color=color, width=2),
             hovertemplate="%{y:.2%}"))
+    if alive is not None and curves:
+        months = len(curves[0][1].ruin_histogram)
+        ages = [retirement_age + (m + 1) / 12 for m in range(months)]
+        fig.add_trace(go.Scatter(
+            x=ages, y=[alive(a) for a in ages], name="P(alive)",
+            mode="lines", line=dict(color=theme.muted, width=1.5,
+                                    dash="dot"),
+            hovertemplate="%{y:.0%}"))
     _base_layout(fig, theme)
-    _ceiling_line(fig, 1 - ceiling, f"{1 - ceiling:.0%} solvent", theme)
     fig.update_xaxes(title_text="Age", hoverformat=".1f")
-    fig.update_yaxes(title_text="P(still solvent)", tickformat=".0%")
+    fig.update_yaxes(title_text="Probability", tickformat=".0%",
+                     range=[0, 1.02])
     return fig
 
 

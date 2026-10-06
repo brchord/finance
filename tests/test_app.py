@@ -87,8 +87,9 @@ def test_cell_page(monkeypatch, reviews_with_run):
     at = run_page(monkeypatch, reviews_with_run, "views/cell.py")
     labels = [m.label for m in at.metric]
     # Decision and reference model KPI rows.
-    assert labels.count("P(ruin)") == 2
-    assert "ES10 ruin age" in labels
+    assert labels.count("Lifetime ruin") == 2
+    assert "Years in ruin" in labels
+    assert "Ruin by 78" in labels
     # Survival, fan chart (decision + reference tabs) and histogram.
     assert "NAV percentiles by age" in [h.value for h in at.subheader]
     assert len(at.tabs) == 2
@@ -128,8 +129,37 @@ def test_dollars_switch(monkeypatch, reviews_with_run):
 def test_explorer_table_columns(monkeypatch, reviews_with_run):
     at = run_page(monkeypatch, reviews_with_run)
     columns = list(at.dataframe[0].value.columns)
-    assert "Ruin <75" in columns
+    for column in ("Lifetime ruin", "Years in ruin", "Ruin <75",
+                   "Ruin by 78"):
+        assert column in columns
     assert "Ruin <85" not in columns
+    assert "ES10 age" not in columns
+
+
+def test_life_expectancy_form_saves_to_the_review(monkeypatch, tmp_path,
+                                                  reviews_with_run):
+    import shutil
+    root = tmp_path / "reviews"
+    shutil.copytree(reviews_with_run, root)
+    review = store.list_reviews(root)[0]
+    at = run_page(monkeypatch, root)
+
+    def lifetime_ruin():
+        return at.dataframe[0].value["Lifetime ruin"].sum()
+
+    # The highest spending level, where paths are ruined.
+    level = at.selectbox(key=f"level_{review.id}")
+    level.set_value(max(level.options, key=lambda o: float(
+        o.strip("$").replace(",", "")))).run()
+    before = lifetime_ruin()
+    assert before > 0
+    at.sidebar.number_input(key=f"hh_m_{review.id}").set_value(100.0)
+    next(b for b in at.sidebar.button if b.label == "Save").click().run()
+    assert not at.exception, at.exception
+    saved = store.load_review(review.path).household
+    assert saved.person.modal_age == 100.0 and saved.partner is None
+    # Living longer means more of the ruined paths count.
+    assert lifetime_ruin() > before
 
 
 def test_old_results_fall_back_to_nominal(monkeypatch, tmp_path,
